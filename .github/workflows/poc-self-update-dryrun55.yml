@@ -1,0 +1,34 @@
+name: PoC - Self-update dry-run check (non-destructive)
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dry-run-selfupdate:
+    name: Dry-run self-update check (non-destructive)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (read-only)
+        uses: actions/checkout@v4
+
+      - name: Explain PoC
+        run: |
+          echo "PoC (safe): demonstrating configuration risk in self-update workflow."
+          echo "This run will NOT perform git push, create PRs, or use secrets."
+
+      - name: Target file reference
+        run: |
+          echo "Target workflow file: .github/workflows/self-update-on-new-release-version.yaml" > poc-self-evidence.txt
+          echo "Observed risky permissions in that file (manual inspection required): contents: write / pull-requests: write" >> poc-self-evidence.txt
+          echo "This PoC did NOT perform git push or use any secrets." >> poc-self-evidence.txt
+          echo "Run triggered by: $GITHUB_ACTOR on run $GITHUB_RUN_ID" >> poc-self-evidence.txt
+          cat poc-self-evidence.txt
+
+      - name: Upload PoC evidence artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: poc-self-evidence
+          path: poc-self-evidence.txt
