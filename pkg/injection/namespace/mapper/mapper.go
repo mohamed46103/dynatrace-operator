@@ -5,7 +5,7 @@ import (
 	"regexp"
 
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube"
-	dtwebhook "github.com/Dynatrace/dynatrace-operator/pkg/webhook"
+	dtwebhook "github.com/Dynatrace/dynatrace-operator/pkg/webhook/mutation/pod/mutator"
 	"github.com/pkg/errors"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -18,7 +18,8 @@ type ConflictChecker struct {
 }
 
 func (c *ConflictChecker) check(dk *dynakube.DynaKube) error {
-	if !dk.OneAgent().IsAppInjectionNeeded() && !dk.MetadataEnrichmentEnabled() {
+	metadataEnrichment := dk.MetadataEnrichment()
+	if !dk.OneAgent().IsAppInjectionNeeded() && !metadataEnrichment.IsEnabled() {
 		return nil
 	}
 
@@ -97,13 +98,14 @@ func matchOneAgent(dk *dynakube.DynaKube, namespace *corev1.Namespace) (bool, er
 }
 
 func matchMetadataEnrichment(dk *dynakube.DynaKube, namespace *corev1.Namespace) (bool, error) {
-	if !dk.MetadataEnrichmentEnabled() {
+	metadataEnrichment := dk.MetadataEnrichment()
+	if !metadataEnrichment.IsEnabled() {
 		return false, nil
-	} else if dk.MetadataEnrichmentNamespaceSelector() == nil {
+	} else if metadataEnrichment.GetNamespaceSelector() == nil {
 		return true, nil
 	}
 
-	metadataEnrichmentSelector, err := metav1.LabelSelectorAsSelector(dk.MetadataEnrichmentNamespaceSelector())
+	metadataEnrichmentSelector, err := metav1.LabelSelectorAsSelector(metadataEnrichment.GetNamespaceSelector())
 	if err != nil {
 		return false, errors.WithStack(err)
 	}

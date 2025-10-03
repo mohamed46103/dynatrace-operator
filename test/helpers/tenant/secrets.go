@@ -4,7 +4,7 @@ package tenant
 
 import (
 	"context"
-	"path"
+	"path/filepath"
 	"testing"
 
 	"github.com/Dynatrace/dynatrace-operator/test/project"
@@ -20,9 +20,9 @@ import (
 )
 
 var (
-	defaultSingleTenant      = path.Join(project.TestDataDir(), "secrets/single-tenant.yaml")
-	defaultMultiTenant       = path.Join(project.TestDataDir(), "secrets/multi-tenant.yaml")
-	defaultEdgeConnectTenant = path.Join(project.TestDataDir(), "secrets/edgeconnect-tenant.yaml")
+	defaultSingleTenant      = filepath.Join(project.TestDataDir(), "secrets/single-tenant.yaml")
+	defaultMultiTenant       = filepath.Join(project.TestDataDir(), "secrets/multi-tenant.yaml")
+	defaultEdgeConnectTenant = filepath.Join(project.TestDataDir(), "secrets/edgeconnect-tenant.yaml")
 )
 
 type Secrets struct {
@@ -30,10 +30,11 @@ type Secrets struct {
 }
 
 type Secret struct {
-	TenantUID       string `yaml:"tenantUid"`
-	APIURL          string `yaml:"apiUrl"`
-	APIToken        string `yaml:"apiToken"`
-	DataIngestToken string `yaml:"dataIngestToken"`
+	TenantUID          string `yaml:"tenantUid"`
+	APIURL             string `yaml:"apiUrl"`
+	APIToken           string `yaml:"apiToken"`
+	DataIngestToken    string `yaml:"dataIngestToken"`
+	APITokenNoSettings string `yaml:"apiTokenNoSettings"`
 }
 
 type EdgeConnectSecret struct {
@@ -106,20 +107,23 @@ func GetEdgeConnectTenantSecret(t *testing.T) EdgeConnectSecret {
 	return result
 }
 
-func CreateTenantSecret(secretConfig Secret, name, namespace string) features.Func {
+func CreateTenantSecret(apiToken, dataIngestToken, name, namespace string) features.Func {
 	return func(ctx context.Context, t *testing.T, envConfig *envconf.Config) context.Context {
 		defaultSecret := corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      name,
 				Namespace: namespace,
+				Labels: map[string]string{
+					"type": "tenant",
+				},
 			},
 			Data: map[string][]byte{
-				"apiToken": []byte(secretConfig.APIToken),
+				"apiToken": []byte(apiToken),
 			},
 		}
 
-		if secretConfig.DataIngestToken != "" {
-			defaultSecret.Data["dataIngestToken"] = []byte(secretConfig.DataIngestToken)
+		if dataIngestToken != "" {
+			defaultSecret.Data["dataIngestToken"] = []byte(dataIngestToken)
 		}
 
 		err := envConfig.Client().Resources().Create(ctx, &defaultSecret)

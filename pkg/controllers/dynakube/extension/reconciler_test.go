@@ -6,6 +6,7 @@ import (
 
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/activegate"
+	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/extensions"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/scheme/fake"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/shared/communication"
 	"github.com/Dynatrace/dynatrace-operator/pkg/consts"
@@ -29,7 +30,7 @@ const (
 	testNamespace = "test-namespace"
 )
 
-func TestReconciler_Reconcile(t *testing.T) {
+func TestReconciler_ReconcileSecret(t *testing.T) {
 	t.Run("Extension secret not generated when Prometheus is disabled", func(t *testing.T) {
 		dk := createDynakube()
 
@@ -50,7 +51,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 		dk := createDynakube()
 
 		// mock SecretCreated condition
-		conditions.SetSecretCreated(dk.Conditions(), secretConditionType, dk.ExtensionsTokenSecretName())
+		conditions.SetSecretCreated(dk.Conditions(), secretConditionType, dk.Extensions().GetTokenSecretName())
 
 		// mock secret
 		secretToken, _ := dttoken.New(eecConsts.TokenSecretValuePrefix)
@@ -84,7 +85,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 	})
 	t.Run("Extension secret is generated when Prometheus is enabled", func(t *testing.T) {
 		dk := createDynakube()
-		dk.Spec.Extensions = &dynakube.ExtensionsSpec{}
+		dk.Spec.Extensions = &extensions.Spec{PrometheusSpec: &extensions.PrometheusSpec{}}
 
 		fakeClient := fake.NewClient()
 		r := NewReconciler(fakeClient, fakeClient, dk)
@@ -96,7 +97,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 		err = fakeClient.Get(context.Background(), client.ObjectKey{Name: testName + "-extensions-token", Namespace: testNamespace}, &secretFound)
 		require.NoError(t, err)
 		require.NotEmpty(t, secretFound.Data[eecConsts.TokenSecretKey])
-		require.NotEmpty(t, secretFound.Data[consts.OtelcTokenSecretKey])
+		require.NotEmpty(t, secretFound.Data[consts.DatasourceTokenSecretKey])
 
 		// assert extensions token condition is added
 		require.NotEmpty(t, dk.Conditions())
@@ -104,11 +105,11 @@ func TestReconciler_Reconcile(t *testing.T) {
 		condition := meta.FindStatusCondition(*dk.Conditions(), secretConditionType)
 		assert.Equal(t, metav1.ConditionTrue, condition.Status)
 		assert.Equal(t, conditions.SecretCreatedReason, condition.Reason)
-		assert.Equal(t, dk.ExtensionsTokenSecretName()+" created", condition.Message)
+		assert.Equal(t, dk.Extensions().GetTokenSecretName()+" created", condition.Message)
 	})
-	t.Run(`Extension SecretCreated failure condition is set when error`, func(t *testing.T) {
+	t.Run("Extension SecretCreated failure condition is set when error", func(t *testing.T) {
 		dk := createDynakube()
-		dk.Spec.Extensions = &dynakube.ExtensionsSpec{}
+		dk.Spec.Extensions = &extensions.Spec{PrometheusSpec: &extensions.PrometheusSpec{}}
 
 		misconfiguredReader, _ := client.New(&rest.Config{}, client.Options{})
 		r := NewReconciler(fake.NewClient(), misconfiguredReader, dk)
@@ -123,20 +124,65 @@ func TestReconciler_Reconcile(t *testing.T) {
 		assert.Equal(t, conditions.KubeAPIErrorReason, condition.Reason)
 		assert.Contains(t, condition.Message, "A problem occurred when using the Kubernetes API")
 	})
+	t.Run("Extension secret migration", func(t *testing.T) {
+		dk := createDynakube()
+		dk.Spec.Extensions = &extensions.Spec{
+			PrometheusSpec: &extensions.PrometheusSpec{},
+			DatabasesSpec:  nil,
+		}
 
+		dsToken := "datasourceToken"
+		eecToken := "eecToken"
+
+		secretData := map[string][]byte{
+			eecConsts.TokenSecretKey:      []byte(eecToken),
+			DeprecatedOtelcTokenSecretKey: []byte(dsToken),
+		}
+
+		oldSecret, err := k8ssecret.Build(dk, testName+"-extensions-token", secretData)
+		require.NoError(t, err)
+
+		conditions.SetSecretCreated(dk.Conditions(), secretConditionType, oldSecret.Name)
+
+		fakeClient := fake.NewClient(oldSecret)
+		r := NewReconciler(fakeClient, fakeClient, dk)
+
+		err = r.Reconcile(context.Background())
+		require.NoError(t, err)
+
+		// assert extensions token is generated
+		var secretFound corev1.Secret
+		err = fakeClient.Get(context.Background(), client.ObjectKey{Name: testName + "-extensions-token", Namespace: testNamespace}, &secretFound)
+		require.NoError(t, err)
+
+		require.NotEmpty(t, secretFound.Data[eecConsts.TokenSecretKey])
+		require.NotEmpty(t, secretFound.Data[consts.DatasourceTokenSecretKey])
+		require.Empty(t, secretFound.Data[DeprecatedOtelcTokenSecretKey])
+
+		// assert extensions token condition is added
+		require.NotEmpty(t, dk.Conditions())
+
+		condition := meta.FindStatusCondition(*dk.Conditions(), secretConditionType)
+		assert.Equal(t, metav1.ConditionTrue, condition.Status)
+		assert.Equal(t, conditions.SecretCreatedReason, condition.Reason)
+		assert.Equal(t, dk.Extensions().GetTokenSecretName()+" created", condition.Message)
+	})
+}
+
+func TestReconciler_ReconcileService(t *testing.T) {
 	t.Run("Create service when extensions are enabled with minimal setup", func(t *testing.T) {
 		dk := createDynakube()
-		dk.Spec.Extensions = &dynakube.ExtensionsSpec{}
+		dk.Spec.Extensions = &extensions.Spec{PrometheusSpec: &extensions.PrometheusSpec{}}
 
 		mockK8sClient := fake.NewClient(dk)
 
-		r := &reconciler{client: mockK8sClient, apiReader: mockK8sClient, dk: dk, timeProvider: timeprovider.New()}
+		r := NewReconciler(mockK8sClient, mockK8sClient, dk)
 		err := r.Reconcile(context.Background())
 
 		require.NoError(t, err)
 
 		var svc corev1.Service
-		err = mockK8sClient.Get(context.Background(), client.ObjectKey{Name: dk.ExtensionsServiceName(), Namespace: testNamespace}, &svc)
+		err = mockK8sClient.Get(context.Background(), client.ObjectKey{Name: dk.Extensions().GetServiceName(), Namespace: testNamespace}, &svc)
 		require.NoError(t, err)
 		assert.NotNil(t, svc)
 
@@ -161,7 +207,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 		require.NoError(t, err)
 
 		var svc corev1.Service
-		err = mockK8sClient.Get(context.Background(), client.ObjectKey{Name: dk.ExtensionsServiceName(), Namespace: testNamespace}, &svc)
+		err = mockK8sClient.Get(context.Background(), client.ObjectKey{Name: dk.Extensions().GetServiceName(), Namespace: testNamespace}, &svc)
 		require.Error(t, err)
 		assert.True(t, k8serrors.IsNotFound(err))
 	})

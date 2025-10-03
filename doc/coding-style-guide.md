@@ -15,7 +15,7 @@
 - [Logging](#logging)
   - [Do's](#dos-1)
   - [Don'ts](#donts-1)
-  - [Debugging](#debugging)
+  - [Debug logs](#debug-logs)
 - [Testing](#testing)
   - [Do's](#dos-2)
   - [Don'ts](#donts-2)
@@ -35,6 +35,7 @@
 - Avoid returning responses (e.g., reconcile.Result, admission.Patched) in anything but Reconcile or Handle functions.
 - Run the linters locally before opening a PR, it will save you time.
   - There is a pre-commit hook that you can configure via `make prerequisites/setup-pre-commit`
+- Avoid using the `path` package for operations on filesystem paths. Use "path/filepath" package.
 
 ## Function Parameter and Return-Value Order
 
@@ -116,6 +117,113 @@ Important characteristics:
   - The cleanup is "invisible" for the caller of the `Reconciler`, so its up to the `Reconciler` to decide if it needs to clean up or setup/update.
     - Example: `DynakubeController` should just call the `ActiveGateReconciler.Reconcile` function, and not worry about if it will create(i.e.: setup) a `StatefulSet` or delete(i.e.: cleanup) the no longer necessary one.
 
+## Secret/ConfigMap handling
+
+A significant role of the Operator is to create/update or just pass along Secrets/ConfigMaps to components it manages.
+
+The main problem that needs to be solved is: If a `Secret/ConfigMap` changes, that warrants the restart of a component that uses it, how do we go about this?
+
+General rules to follow:
+
+- Each `Secret/ConfigMap` we manage should have it's own package, that contain:
+  - The func to determine the name of the `Secret/ConfigMap`. (example: `GetName`)
+  - A `const` for each key used inside the `data` of the `Secret/ConfigMap`.
+    - Make them `public` if they will be used via `Items` when mounting it.
+  - Unique annotation keys ( public `const`) for keeping track of `Secret/ConfigMap` changes (example: `TokenHashAnnotationKey`)
+    - An annotation can be for storing a hash of the whole `Secret/ConfigMap` or part of it. Make this clear in the name of the annotation.
+      - For not confidential values it is ok to use `GenerateHash`
+      - For confidential values `GenerateSecureHash` should be used
+    - An annotation can be for storing the exact value from the `DynaKube`, makes sense for simple, non-confidential data. (example: `networkZone`)
+  - A func to add all the relevant annotations to the provided map. (example: `AddAnnotations`)
+    - There can be multiple annotation for `Secret/ConfigMap`, or just 1.
+      - It makes sense to have multiple for the cases where you don't want to cause a restart if part of the `Secret/ConfigMap` changes.
+         Example: The communication endpoints of the OneAgent changes overtime, the OneAgent handles it on its own so that shouldn't cause a restart.
+      - It makes sense to have 1 if any change to the `Secret/ConfigMap` should cause a restart.
+        - Be mindful, if something is later added to such `Secret/ConfigMap`, having a single hash for the whole will cause everything using it to restart after an Operator update.
+      - It is recommended to have 1 hash for all the "required" parts of the `Secret/ConfigMap`, and individual ones for the "optional" parts.
+        - The "optional" parts will always be a value directly from the `DynaKube` or something referenced from the `DynaKube`, in either case there should already be a raw value or hash ready to be used.
+  - The "reconcile" logic
+    - If a unique hash will be calculated for this Secret, then the "reconcile logic" should calc/set/unset this as it is necessary.
+      - Should be set/stored in the `Status` of the `DynaKube` so it can be reused, instead of recalculated from other reconcilers.
+
+- This package is used by other packages that would like to mount the `Secret/ConfigMap`
+  - Using the `GetName`, to reference the `Secret/ConfigMap` in a Volume or Env
+  - Using the "public `const` for each key" to what to part of the `Secret/ConfigMap` to use. (use `Items` instead of `SubPath`)
+  - Using the `AddAnnotation` to put the hashed content of the `Secret/ConfigMap` (from the `DynaKube`'s `status`) into the `template.metadata.annotations` of the component, **IF** it needs to be restarted when the `Secret/ConfigMap` changes.
+
+Reasoning for these rules:
+
+- As of writing this, we have 15+ `Secrets/ConfigMaps` that we manage and provide to 4+ components. (some components need more, some less)
+  - Putting all of this within the `api` package, when we already tend to have a package for each `Secret/ConfigMap` for "reconciling" is just breaking the "single-place-of-truth" for no good reason.
+  - Fetching and recalculating the hash for each component where a `Secret/ConfigMap` is used would be fine if we only had a few of them, but we have 15+.
+    - Why not use the cache? -> Using the built-in cache of the `Client` had caused problems in the past (the cache was not up to date), which could lead to inconsistency.
+
+### Example
+
+Do this:
+
+```go
+package configsecret
+
+// import (...)
+
+const (
+  logMonitoringSecretSuffix = "-logmonitoring-config"
+
+  TokenHashAnnotationKey   = api.InternalFlagPrefix + "tenant-token-hash"
+  NetworkZoneAnnotationKey = api.InternalFlagPrefix + "network-zone"
+
+  //...
+)
+
+// type Reconciler struct { ... }
+// func NewReconciler(...) {...}
+// func (r *Reconciler) Reconcile(ctx context.Context) error {...}
+
+func GetSecretName(dkName string) string {
+  return dkName + logMonitoringSecretSuffix
+}
+
+func AddAnnotations(source map[string]string, dk dynakube.DynaKube) map[string]string {
+  annotation := map[string]string{}
+  if source != nil {
+   annotation = maps.Clone(source)
+  }
+
+  annotation[TokenHashAnnotationKey] = dk.OneAgent().ConnectionInfoStatus.TenantTokenHash
+  if dk.Spec.NetworkZone != "" {
+   annotation[NetworkZoneAnnotationKey] = dk.Spec.NetworkZone
+  }
+
+  return annotation
+}
+
+```
+
+Not this:
+
+```go
+package oneagent
+
+// import (...)
+
+const (
+  OneAgentTenantSecretSuffix            = "-oneagent-tenant-secret"
+  OneAgentConnectionInfoConfigMapSuffix = "-oneagent-connection-info"
+// ...
+)
+
+func (oa *OneAgent) GetTenantSecret() string {
+  return oa.name + OneAgentTenantSecretSuffix
+}
+
+func (oa *OneAgent) GetConnectionInfoConfigMapName() string {
+  return oa.name + OneAgentConnectionInfoConfigMapSuffix
+}
+
+// ...
+```
+
 ## Errors
 
 ### Do's
@@ -175,7 +283,7 @@ For example:
 package abc
 
 import (
-    "github.com/Dynatrace/dynatrace-operator/pkg/api/v1beta2/dynakube"
+    "github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube"
 )
 ```
 
@@ -194,8 +302,8 @@ import (
 package abc
 
 import (
-    dynakubev1beta2  "github.com/Dynatrace/dynatrace-operator/pkg/api/v1beta2/dynakube"
-    dynakubev1beta3  "github.com/Dynatrace/dynatrace-operator/pkg/api/v1beta3/dynakube"
+    dynakubelatest  "github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube"
+    dynakubev1beta5  "github.com/Dynatrace/dynatrace-operator/pkg/api/v1beta5/dynakube"
 )
 ```
 
@@ -233,7 +341,7 @@ func (c component) getImage(dk *dynakube.DynaKube) (string, bool) {}
 package abc
 
 import (
-    dynatracev1beta2 "github.com/Dynatrace/dynatrace-operator/pkg/api/v1beta2/dynakube"
+    dynatracelatest "github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube"
 )
 ```
 
@@ -257,7 +365,7 @@ import (
   - Example: `log.Info("deleted volume info", "ID", volume.VolumeID, "PodUID", volume.PodName, "Version", volume.Version, "TenantUUID", volume.TenantUUID)`
 - Don't start a log message with uppercase characters, unless it's a name of an exact proper noun.
 
-### Debugging
+### Debug logs
 
 - Do not log errors that bubble up to the controller runtime. They will be logged anyway, and we do not want to log errors multiple times because it's confusing.
 - Use debug logs to show the flow.
@@ -318,43 +426,74 @@ func (controller *Controller) reconcileEdgeConnectDeletion(ctx context.Context, 
 ### Do's
 
 - Write unit-tests ;)
+- Name test functions like the following
+  - for public funcs -> `func TestPublicFunc(t *testing.T)`
+  - for private funcs -> `func Test_privateFunc(t *testing.T)`
+  - for public method for public struct -> `func Test_MyStruct_PublicMethod(t *testing.T)`
+  - for private method for public struct -> `func Test_MyStruct_privateMethod(t *testing.T)`
+  - for public method for private struct -> `func Test_myStruct_PublicMethod(t *testing.T)`
+  - for private method for private struct -> `func Test_myStruct_privateMethod(t *testing.T)`
+  - Avoid "scenarios" in the name, use `t.Run` within the tests.
+    - So avoid funcs like `func Test_MyStruct_PublicMethod_Scenario1(t *testing.T)` and instead use `t.Run("scenario1", ...)` within `func Test_MyStruct_PublicMethod`
 - Use `assert` and `require`. (`github.com/stretchr/testify/assert, github.com/stretchr/testify/require`)
 - `require` is your friend, use it for checking errors (`require.NoError(t, err)`) or anywhere where executing the rest of the `assert`s in case of the check failing would just be noise in the output.
-- Abstract the setup/assert phase as much as possible so it can be reused in other tests in the package.
+- Mock per test, not per package.
+  - Having one `createTestReconciler(p1,p2,p3,p4,p5)` that tries to mock all and fit in all test cases is just maintenance hell, because if you change 1 test-case then you will change all others, also your mocks will be too forgiving, which is great for bugs.
+    - Create small, test specific mocks.
+    - Such mocks can be created with helper functions defined within the test case, to reuse it within the test case.
+- Helper functions per-test are preferred to helper functions per-package
+  - Writing helper functions for a whole package can backfire quickly as it binds tests together unnecessary.
+    - example: Change 1 helper function -> break 3 tests but fix 2 -> probably should be split into test specific helpers
+    - For simpler common setups func it can still make sense.
+  - All helper func must use `t.Helper()` as their first-line, for improved error reporting.
+- Defining (testing) `consts` per-test is preferred to defining (testing) `consts` per-package
+  - Figuring out what is `myTestConst52` that is defined 3 files over and used by 12 tests is not fun to maintain and easy to follow.
 - Use `t.Run` and give a title that describes what you are testing in that run.
-- Use `context.Background` when a context is needed, use `context.TODO` ONLY for actual TODOs. (example: you want to create a special context here later to test something specific)
+- Use `t.Context` instead of `context.Background`.
+  - [Added in go 1.24](https://pkg.go.dev/testing#T.Context), so we don't really use it, update it where you change code
 - Use `<...>mock` as package import alias, in all cases, even if no alias would strictly be necessary.
   - Examples: `dtclientmock`, `controllermock`, `dtbuildermock`, `injectionmock`, `registrymock`
 - Use this structure: (or table-tests)
+  - The usage of `"` instead of ``` ` ``` in `t.Run` is important, as in VSCode you can't run individual tests if they are defined as ``` t.Run(`test`, ...) ```, but can when defined as``` t.Run("test", ...) ```.
 
 ```go
 func TestMyFunction(t *testing.T) {
     // Common setup, used for multiple cases
-    testString := "test"
+    const testString = "test"
+
+    mySetupFunc := func(t *testing.T, prop int) {
+      t.Helper()
+      // Do some test specific setup/helper logic
+      // - can be reused per `t.Run`
+      // - can be just configurable enough to meet the requirements of the `t.Run`s in this test
+      // - "hidden" from other tests, so reusing it is more intentional and wont affect this test
+    }
+
+    mockMyClient := func(t *testing.T, prop int) MyClient {
+      t.Helper()
+      // Creating MyClient mock, specific to this test.
+      // - can be reused per `t.Run`
+      // - can be just configurable enough to meet the requirements of the `t.Run`s in this test
+      // - "hidden" from other tests, so reusing it is more intentional and wont affect this test
+    }
 
     // Each test case of a function gets a t.Run
-    t.Run(`useful title`, func(t *testing.T) {
+    t.Run("useful title", func(t *testing.T) {
         // Arrange/Setup
         testInt := 1
+        mySetupFunc(testInt)
+        client := mockMyClient(testInt)
 
         // Act
-        out, err := MyFunction(testString, testInt)
+        out, err := MyFunction(t.Context(), client, testString, testInt)
 
         // Assert
         require.Nil(t, err)
         assert.Equal(t, out, testString)
     })
 
-    t.Run(`other useful title`, func(t *testing.T) {
-        // Arrange
-        testInt := 4
-
-        // Act
-        out, err := MyFunction(testString, testInt)
-
-        // Assert
-        require.Error(t, err)
-        assert.Empty(t, out)
+    t.Run("another useful title", func(t *testing.T) {
+        //...
     })
 }
 ```
@@ -363,7 +502,7 @@ func TestMyFunction(t *testing.T) {
 
 - Don't name the testing helper functions/variables/constants in a way that could be confused with actual functions. (e.g. add `test` to the beginning)
 - Avoid magic ints/strings/... where possible, give names to your values and try to reuse them where possible
-- Don't name test functions like `TestMyFunctionFirstCase`, instead use single `TestMyFunction` test function with multiple `t.Run` cases in it that have descriptive names.
+- Don't use `.Maybe()` when mocking, have test specific mocks, so the calls are checked for you.
 
 ## E2E testing guide
 
@@ -396,7 +535,7 @@ So here are some basic guidelines:
 
 ## Code Review
 
-[Common guidelines](https://github.com/golang/go/wiki/CodeReview)
+[Common guidelines](https://go.dev/wiki/CodeReviewComments)
 
 - (🧑‍🤝‍🧑) 2 approvals per PR is preferred
 - (✅) Resolving a comment is the duty of the commenter. (after the comment was addressed)

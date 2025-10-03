@@ -53,6 +53,13 @@ type Client interface {
 	// GetCommunicationHostForClient returns a CommunicationHost for the client's API URL. Or error, if failed to be parsed.
 	GetCommunicationHostForClient() (CommunicationHost, error)
 
+	// SendEvent posts events to dynatrace API
+	SendEvent(ctx context.Context, eventData *EventData) error
+
+	// GetEntityIDForIP returns the entity id for a given IP address.
+	// Returns an error in case the lookup failed.
+	GetEntityIDForIP(ctx context.Context, ip string) (string, error)
+
 	// GetTokenScopes returns the list of scopes assigned to a token if successful.
 	GetTokenScopes(ctx context.Context, token string) (TokenScopes, error)
 
@@ -68,13 +75,17 @@ type Client interface {
 	// CreateOrUpdateKubernetesAppSetting returns the object id of the created k8s app settings if successful, or an api error otherwise
 	CreateOrUpdateKubernetesAppSetting(ctx context.Context, scope string) (string, error)
 
-	// GetMonitoredEntitiesForKubeSystemUUID returns a (possibly empty) list of k8s monitored entities for the given uuid,
-	// or an api error otherwise
-	GetMonitoredEntitiesForKubeSystemUUID(ctx context.Context, kubeSystemUUID string) ([]MonitoredEntity, error)
+	// GetK8sClusterME returns the Kubernetes Cluster Monitored Entity for the give kubernetes cluster.
+	// Uses the `settings.read` scope to list the `builtin:cloud.kubernetes` settings.
+	// - Only 1 such setting exists per tenant per kubernetes cluster
+	// - The `scope` for the setting is the ID (example: KUBERNETES_CLUSTER-A1234567BCD8EFGH) of the Kubernetes Cluster Monitored Entity
+	// - The `label` of the setting is the Name (example: my-dynakube) of the Kubernetes Cluster Monitored Entity
+	// In case 0 settings are found, so no Kubernetes Cluster Monitored Entity exist, we return an empty object, without an error.
+	GetK8sClusterME(ctx context.Context, kubeSystemUUID string) (K8sClusterME, error)
 
 	// GetSettingsForMonitoredEntity returns the settings response with the number of settings objects,
 	// or an api error otherwise
-	GetSettingsForMonitoredEntity(ctx context.Context, monitoredEntity *MonitoredEntity, schemaID string) (GetSettingsResponse, error)
+	GetSettingsForMonitoredEntity(ctx context.Context, monitoredEntity K8sClusterME, schemaID string) (GetSettingsResponse, error)
 
 	// GetSettingsForLogModule returns the settings response with the number of settings objects,
 	// or an api error otherwise
@@ -111,12 +122,26 @@ const (
 
 // Relevant token scopes
 const (
-	TokenScopeInstallerDownload     = "InstallerDownload"
-	TokenScopeMetricsIngest         = "metrics.ingest"
-	TokenScopeEntitiesRead          = "entities.read"
-	TokenScopeSettingsRead          = "settings.read"
-	TokenScopeSettingsWrite         = "settings.write"
-	TokenScopeActiveGateTokenCreate = "activeGateTokenManagement.create"
+	TokenScopeInstallerDownload        = "InstallerDownload"
+	TokenScopeDataExport               = "DataExport"
+	TokenScopeMetricsIngest            = "metrics.ingest"
+	TokenScopeOpenTelemetryTraceIngest = "openTelemetryTrace.ingest"
+	TokenScopeLogsIngest               = "logs.ingest"
+	TokenScopeSettingsRead             = "settings.read"
+	TokenScopeSettingsWrite            = "settings.write"
+	TokenScopeActiveGateTokenCreate    = "activeGateTokenManagement.create"
+)
+
+const (
+	ConditionTypeAPITokenSettingsRead  = "ApiTokenSettingsRead"
+	ConditionTypeAPITokenSettingsWrite = "ApiTokenSettingsWrite"
+)
+
+var (
+	OptionalScopes = map[string]string{
+		TokenScopeSettingsRead:  ConditionTypeAPITokenSettingsRead,
+		TokenScopeSettingsWrite: ConditionTypeAPITokenSettingsWrite,
+	}
 )
 
 type NewFunc func(url, apiToken, paasToken string, opts ...Option) (Client, error)
@@ -147,6 +172,7 @@ func NewClient(url, apiToken, paasToken string, opts ...Option) (Client, error) 
 		apiToken:  apiToken,
 		paasToken: paasToken,
 
+		hostCache: make(map[string]hostInfo),
 		httpClient: &http.Client{
 			Transport: http.DefaultTransport.(*http.Transport).Clone(),
 			Timeout:   15 * time.Minute,

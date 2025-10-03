@@ -8,10 +8,9 @@ import (
 	dynakubelatest "github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube"
 	edgeconnectv1alpha1 "github.com/Dynatrace/dynatrace-operator/pkg/api/v1alpha1/edgeconnect"
 	edgeconnectv1alpha2 "github.com/Dynatrace/dynatrace-operator/pkg/api/v1alpha2/edgeconnect"
-	dynakubev1beta1 "github.com/Dynatrace/dynatrace-operator/pkg/api/v1beta1/dynakube" //nolint:staticcheck
-	dynakubev1beta2 "github.com/Dynatrace/dynatrace-operator/pkg/api/v1beta2/dynakube" //nolint:staticcheck
 	dynakubev1beta3 "github.com/Dynatrace/dynatrace-operator/pkg/api/v1beta3/dynakube"
 	dynakubev1beta4 "github.com/Dynatrace/dynatrace-operator/pkg/api/v1beta4/dynakube"
+	dynakubev1beta5 "github.com/Dynatrace/dynatrace-operator/pkg/api/v1beta5/dynakube"
 	dynakubevalidation "github.com/Dynatrace/dynatrace-operator/pkg/api/validation/dynakube"
 	edgeconnectvalidation "github.com/Dynatrace/dynatrace-operator/pkg/api/validation/edgeconnect"
 	"github.com/Dynatrace/dynatrace-operator/pkg/logd"
@@ -86,7 +85,6 @@ func run() func(*cobra.Command, []string) error {
 			logd.Get().WithName("platform").Error(err, "failed to detect platform, due to discovery client issues")
 		} else {
 			_, err = client.ServerResourcesForGroupVersion(openshiftSecurityGVR)
-
 			if !k8serrors.IsNotFound(err) {
 				logd.Get().WithName("platform").Info("detected platform", "platform", "openshift")
 
@@ -156,22 +154,17 @@ func startCertificateWatcher(webhookManager manager.Manager, namespace string, p
 func setupDynakubeValidation(webhookManager manager.Manager) error {
 	dkValidator := dynakubevalidation.New(webhookManager.GetAPIReader(), webhookManager.GetConfig())
 
-	err := dynakubev1beta1.SetupWebhookWithManager(webhookManager, dkValidator)
-	if err != nil {
-		return err
-	}
-
-	err = dynakubev1beta2.SetupWebhookWithManager(webhookManager, dkValidator)
-	if err != nil {
-		return err
-	}
-
-	err = dynakubev1beta3.SetupWebhookWithManager(webhookManager, dkValidator)
+	err := dynakubev1beta3.SetupWebhookWithManager(webhookManager, dkValidator)
 	if err != nil {
 		return err
 	}
 
 	err = dynakubev1beta4.SetupWebhookWithManager(webhookManager, dkValidator)
+	if err != nil {
+		return err
+	}
+
+	err = dynakubev1beta5.SetupWebhookWithManager(webhookManager, dkValidator)
 	if err != nil {
 		return err
 	}

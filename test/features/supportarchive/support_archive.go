@@ -8,7 +8,7 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -70,7 +70,6 @@ func Feature(t *testing.T) features.Feature {
 		dynakubeComponents.WithCloudNativeSpec(&oneagent.CloudNativeFullStackSpec{}),
 		dynakubeComponents.WithActiveGate(),
 		dynakubeComponents.WithActiveGateTLSSecret(consts.AgSecretName),
-		dynakubeComponents.WithCustomPullSecret(consts.DevRegistryPullSecretName),
 		dynakubeComponents.WithExtensionsEnabledSpec(true),
 		dynakubeComponents.WithExtensionsEECImageRefSpec(consts.EecImageRepo, consts.EecImageTag),
 	)
@@ -95,10 +94,10 @@ func Feature(t *testing.T) features.Feature {
 	builder.Assess("deploy injected namespace", namespace.Create(*namespace.New(testAppNameInjected, namespace.WithLabels(injectLabels))))
 	builder.Assess("deploy NOT injected namespace", namespace.Create(*namespace.New(testAppNameNotInjected)))
 
-	agCrt, err := os.ReadFile(path.Join(project.TestDataDir(), consts.AgCertificate))
+	agCrt, err := os.ReadFile(filepath.Join(project.TestDataDir(), consts.AgCertificate))
 	require.NoError(t, err)
 
-	agP12, err := os.ReadFile(path.Join(project.TestDataDir(), consts.AgCertificateAndPrivateKey))
+	agP12, err := os.ReadFile(filepath.Join(project.TestDataDir(), consts.AgCertificateAndPrivateKey))
 	require.NoError(t, err)
 
 	agSecret := secret.New(consts.AgSecretName, testDynakube.Namespace,
@@ -114,7 +113,7 @@ func Feature(t *testing.T) features.Feature {
 
 	// check if components are running
 	builder.Assess("active gate pod is running", statefulset.WaitFor(testDynakube.Name+"-"+agconsts.MultiActiveGateName, testDynakube.Namespace))
-	builder.Assess("extensions execution controller started", statefulset.WaitFor(testDynakube.ExtensionsExecutionControllerStatefulsetName(), testDynakube.Namespace))
+	builder.Assess("extensions execution controller started", statefulset.WaitFor(testDynakube.Extensions().GetExecutionControllerStatefulsetName(), testDynakube.Namespace))
 	builder.Assess("extension collector started", statefulset.WaitFor(testDynakube.OtelCollectorStatefulsetName(), testDynakube.Namespace))
 
 	// Register actual test

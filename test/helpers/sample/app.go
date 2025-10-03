@@ -5,10 +5,11 @@ package sample
 import (
 	"context"
 	"fmt"
-	"path"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/Dynatrace/dynatrace-operator/pkg/webhook/mutation/pod/mutator"
 	"github.com/Dynatrace/dynatrace-operator/test/helpers"
 	"github.com/Dynatrace/dynatrace-operator/test/helpers/kubeobjects/deployment"
 	"github.com/Dynatrace/dynatrace-operator/test/helpers/kubeobjects/event"
@@ -36,10 +37,10 @@ import (
 
 var (
 	defaultNameTemplate        = "sample-%s"
-	podTemplatePath            = path.Join(project.TestDataDir(), "sample-app/pod-base.yaml")
-	serviceAccountTemplatePath = path.Join(project.TestDataDir(), "sample-app/serviceaccount.yaml")
-	clusterRolePath            = path.Join(project.TestDataDir(), "sample-app/clusterrole.yaml")
-	bindingPath                = path.Join(project.TestDataDir(), "sample-app/binding.yaml")
+	podTemplatePath            = filepath.Join(project.TestDataDir(), "sample-app/pod-base.yaml")
+	serviceAccountTemplatePath = filepath.Join(project.TestDataDir(), "sample-app/serviceaccount.yaml")
+	clusterRolePath            = filepath.Join(project.TestDataDir(), "sample-app/clusterrole.yaml")
+	bindingPath                = filepath.Join(project.TestDataDir(), "sample-app/binding.yaml")
 )
 
 type App struct {
@@ -52,6 +53,7 @@ type App struct {
 	installedNamespace bool
 	isDeployment       bool
 	withoutClusterRole bool
+	canInitError       bool
 }
 
 type Option func(*App)
@@ -71,7 +73,12 @@ func NewApp(t *testing.T, owner metav1.Object, options ...Option) *App {
 		scBase:    sc,
 		namespace: *namespace.New(base.Namespace),
 	}
-	for _, opt := range options {
+
+	defaultOptions := []Option{
+		WithFailurePolicy(true),
+	}
+
+	for _, opt := range append(defaultOptions, options...) {
 		opt(app)
 	}
 
@@ -115,6 +122,21 @@ func WithAnnotations(annotations map[string]string) Option {
 	}
 }
 
+func WithFailurePolicy(fail bool) Option {
+	return func(app *App) {
+		if app.base.Annotations == nil {
+			app.base.Annotations = map[string]string{}
+		}
+		if fail {
+			app.base.Annotations[mutator.AnnotationFailurePolicy] = "fail"
+		} else {
+			delete(app.base.Annotations, mutator.AnnotationFailurePolicy)
+		}
+
+		app.canInitError = fail
+	}
+}
+
 func WithLabels(labels map[string]string) Option {
 	return func(app *App) {
 		app.base.Labels = labels
@@ -155,6 +177,10 @@ func (app *App) InstallNamespace() features.Func {
 	app.installedNamespace = true
 
 	return namespace.Create(app.namespace)
+}
+
+func (app *App) CanInitError() bool {
+	return app.canInitError
 }
 
 func WithoutClusterRole() Option {

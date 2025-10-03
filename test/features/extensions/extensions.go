@@ -5,7 +5,7 @@ package extensions
 import (
 	"context"
 	"os"
-	"path"
+	"path/filepath"
 	"testing"
 
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube"
@@ -30,7 +30,6 @@ func Feature(t *testing.T) features.Feature {
 
 	options := []componentDynakube.Option{
 		componentDynakube.WithAPIURL(secretConfig.APIURL),
-		componentDynakube.WithCustomPullSecret(consts.DevRegistryPullSecretName),
 		componentDynakube.WithExtensionsEnabledSpec(true),
 		componentDynakube.WithExtensionsEECImageRefSpec(consts.EecImageRepo, consts.EecImageTag),
 		componentDynakube.WithActiveGate(),
@@ -39,10 +38,10 @@ func Feature(t *testing.T) features.Feature {
 
 	testDynakube := *componentDynakube.New(options...)
 
-	agCrt, err := os.ReadFile(path.Join(project.TestDataDir(), consts.AgCertificate))
+	agCrt, err := os.ReadFile(filepath.Join(project.TestDataDir(), consts.AgCertificate))
 	require.NoError(t, err)
 
-	agP12, err := os.ReadFile(path.Join(project.TestDataDir(), consts.AgCertificateAndPrivateKey))
+	agP12, err := os.ReadFile(filepath.Join(project.TestDataDir(), consts.AgCertificateAndPrivateKey))
 	require.NoError(t, err)
 
 	agSecret := secret.New(consts.AgSecretName, testDynakube.Namespace,
@@ -56,7 +55,7 @@ func Feature(t *testing.T) features.Feature {
 
 	builder.Assess("active gate pod is running", checkActiveGateContainer(&testDynakube))
 
-	builder.Assess("extensions execution controller started", statefulset.WaitFor(testDynakube.ExtensionsExecutionControllerStatefulsetName(), testDynakube.Namespace))
+	builder.Assess("extensions execution controller started", statefulset.WaitFor(testDynakube.Extensions().GetExecutionControllerStatefulsetName(), testDynakube.Namespace))
 
 	builder.Assess("extension collector started", statefulset.WaitFor(testDynakube.OtelCollectorStatefulsetName(), testDynakube.Namespace))
 

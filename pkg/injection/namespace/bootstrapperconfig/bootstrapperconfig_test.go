@@ -11,11 +11,12 @@ import (
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/exp"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/activegate"
+	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/metadataenrichment"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/oneagent"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/scheme/fake"
 	dtclient "github.com/Dynatrace/dynatrace-operator/pkg/clients/dynatrace"
 	"github.com/Dynatrace/dynatrace-operator/pkg/consts"
-	dtwebhook "github.com/Dynatrace/dynatrace-operator/pkg/webhook"
+	dtwebhook "github.com/Dynatrace/dynatrace-operator/pkg/webhook/mutation/pod/mutator"
 	dtclientmock "github.com/Dynatrace/dynatrace-operator/test/mocks/pkg/clients/dynatrace"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
@@ -127,7 +128,7 @@ func TestGenerateForDynakube(t *testing.T) {
 			Spec: dynakube.DynaKubeSpec{
 				APIURL:     testAPIurl,
 				TrustedCAs: "test-trusted-ca",
-				MetadataEnrichment: dynakube.MetadataEnrichment{
+				MetadataEnrichment: metadataenrichment.Spec{
 					Enabled: ptr.To(true),
 				},
 				OneAgent: oneagent.Spec{
@@ -225,7 +226,7 @@ func TestGenerateForDynakube(t *testing.T) {
 			},
 			Spec: dynakube.DynaKubeSpec{
 				APIURL: testAPIurl,
-				MetadataEnrichment: dynakube.MetadataEnrichment{
+				MetadataEnrichment: metadataenrichment.Spec{
 					Enabled: ptr.To(true),
 				},
 				OneAgent: oneagent.Spec{

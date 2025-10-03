@@ -6,7 +6,7 @@ import (
 	"bytes"
 	"context"
 	"io"
-	"path"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -32,7 +32,7 @@ const (
 )
 
 var (
-	csiNetworkPolicy = path.Join(project.TestDataDir(), "network/csi-denial.yaml")
+	csiNetworkPolicy = filepath.Join(project.TestDataDir(), "network/csi-denial.yaml")
 )
 
 // Prerequisites: istio service mesh
@@ -64,6 +64,7 @@ func ResilienceFeature(t *testing.T) features.Feature {
 	sampleApp := sample.NewApp(t, &testDynakube,
 		sample.AsDeployment(),
 		sample.WithNamespace(sampleNamespace),
+		sample.WithFailurePolicy(false),
 	)
 	builder.Assess("create sample namespace", sampleApp.InstallNamespace())
 

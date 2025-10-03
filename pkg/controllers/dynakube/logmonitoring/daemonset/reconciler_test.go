@@ -2,15 +2,20 @@ package daemonset
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
+	"github.com/Dynatrace/dynatrace-operator/pkg/api/exp"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/logmonitoring"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/oneagent"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/scheme/fake"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/shared/communication"
+	"github.com/Dynatrace/dynatrace-operator/pkg/api/shared/value"
+	"github.com/Dynatrace/dynatrace-operator/pkg/controllers/dynakube/logmonitoring/configsecret"
 	"github.com/Dynatrace/dynatrace-operator/pkg/util/conditions"
 	"github.com/Dynatrace/dynatrace-operator/pkg/util/hasher"
+	"github.com/Dynatrace/dynatrace-operator/pkg/util/kubeobjects/env"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -31,7 +36,7 @@ const (
 )
 
 func TestReconcile(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	t.Run("Only clean up if not standalone", func(t *testing.T) {
 		dk := createDynakube(true)
@@ -59,7 +64,7 @@ func TestReconcile(t *testing.T) {
 		require.Nil(t, condition)
 	})
 
-	t.Run("Create and update works with minimal setup", func(t *testing.T) {
+	t.Run("Create and update works with ME set", func(t *testing.T) {
 		dk := createDynakube(true)
 
 		mockK8sClient := fake.NewClient()
@@ -76,7 +81,7 @@ func TestReconcile(t *testing.T) {
 		assert.Equal(t, conditions.DaemonSetSetCreatedReason, condition.Reason)
 		assert.Equal(t, metav1.ConditionTrue, condition.Status)
 
-		err = reconciler.Reconcile(context.Background())
+		err = reconciler.Reconcile(t.Context())
 		require.NoError(t, err)
 
 		var daemonset appsv1.DaemonSet
@@ -87,6 +92,37 @@ func TestReconcile(t *testing.T) {
 		require.False(t, k8serrors.IsNotFound(err))
 		assert.NotEmpty(t, daemonset)
 	})
+
+	t.Run("Create and update works with ME not set", func(t *testing.T) {
+		dk := createDynakube(true)
+		dk.Status.KubernetesClusterMEID = ""
+
+		mockK8sClient := fake.NewClient()
+
+		reconciler := NewReconciler(mockK8sClient,
+			mockK8sClient, dk)
+		err := reconciler.Reconcile(ctx)
+		require.NoError(t, err)
+
+		condition := meta.FindStatusCondition(*dk.Conditions(), ConditionType)
+		require.NotNil(t, condition)
+		oldTransitionTime := condition.LastTransitionTime
+		require.NotEmpty(t, oldTransitionTime)
+		assert.Equal(t, conditions.DaemonSetSetCreatedReason, condition.Reason)
+		assert.Equal(t, metav1.ConditionTrue, condition.Status)
+
+		err = reconciler.Reconcile(t.Context())
+		require.NoError(t, err)
+
+		var daemonset appsv1.DaemonSet
+		err = mockK8sClient.Get(ctx, types.NamespacedName{
+			Name:      dk.LogMonitoring().GetDaemonSetName(),
+			Namespace: dk.Namespace,
+		}, &daemonset)
+		require.False(t, k8serrors.IsNotFound(err))
+		assert.NotEmpty(t, daemonset)
+	})
+
 	t.Run("Only runs when required, and cleans up condition + secret", func(t *testing.T) {
 		dk := createDynakube(false)
 
@@ -119,27 +155,13 @@ func TestReconcile(t *testing.T) {
 		reconciler := NewReconciler(boomClient,
 			boomClient, dk)
 
-		err := reconciler.Reconcile(context.Background())
+		err := reconciler.Reconcile(t.Context())
 
 		require.Error(t, err)
 		require.Len(t, *dk.Conditions(), 1)
 		condition := meta.FindStatusCondition(*dk.Conditions(), ConditionType)
 		assert.Equal(t, conditions.KubeAPIErrorReason, condition.Reason)
 		assert.Equal(t, metav1.ConditionFalse, condition.Status)
-	})
-
-	t.Run("returns an error if no clusterMEID set", func(t *testing.T) {
-		dk := createDynakube(true)
-		dk.Status.KubernetesClusterMEID = ""
-
-		mockK8sClient := fake.NewClient()
-
-		reconciler := NewReconciler(mockK8sClient,
-			mockK8sClient, dk)
-
-		err := reconciler.Reconcile(context.Background())
-
-		require.Error(t, err)
 	})
 }
 
@@ -229,6 +251,48 @@ func TestGenerateDaemonSet(t *testing.T) {
 		assert.Equal(t, customPolicy, daemonset.Spec.Template.Spec.DNSPolicy)
 	})
 
+	t.Run("networkzone is in the template annotations, so if config changes, redeploy happens", func(t *testing.T) {
+		dk := createDynakube(true)
+		dk.Spec.NetworkZone = "my-networkzone"
+
+		reconciler := NewReconciler(nil, fake.NewClient(), dk)
+		daemonset, err := reconciler.generateDaemonSet()
+		require.NoError(t, err)
+		require.NotNil(t, daemonset)
+
+		require.Len(t, daemonset.Spec.Template.Annotations, 2)
+		assert.Equal(t, dk.Spec.NetworkZone, daemonset.Spec.Template.Annotations[configsecret.NetworkZoneAnnotationKey])
+	})
+
+	t.Run("proxy is in the template annotations, so if config changes, redeploy happens", func(t *testing.T) {
+		dk := createDynakube(true)
+		dk.Spec.Proxy = &value.Source{Value: "unknown"}
+		dk.Status.ProxyURLHash = "proxy-hash"
+
+		reconciler := NewReconciler(nil, fake.NewClient(), dk)
+		daemonset, err := reconciler.generateDaemonSet()
+		require.NoError(t, err)
+		require.NotNil(t, daemonset)
+
+		require.Len(t, daemonset.Spec.Template.Annotations, 2)
+		assert.Equal(t, dk.Status.ProxyURLHash, daemonset.Spec.Template.Annotations[configsecret.ProxyHashAnnotationKey])
+	})
+
+	t.Run("no-proxy is in the template annotations, so if config changes, redeploy happens", func(t *testing.T) {
+		dk := createDynakube(true)
+		dk.Annotations = map[string]string{
+			exp.NoProxyKey: "no-proxy",
+		}
+
+		reconciler := NewReconciler(nil, fake.NewClient(), dk)
+		daemonset, err := reconciler.generateDaemonSet()
+		require.NoError(t, err)
+		require.NotNil(t, daemonset)
+
+		require.Len(t, daemonset.Spec.Template.Annotations, 2)
+		assert.Equal(t, "no-proxy", daemonset.Spec.Template.Annotations[configsecret.NoProxyAnnotationKey])
+	})
+
 	t.Run("respect priority class", func(t *testing.T) {
 		customClass := "custom-class"
 
@@ -279,6 +343,7 @@ func TestGenerateDaemonSet(t *testing.T) {
 
 		assert.Equal(t, daemonset.Spec.Template.Spec.Tolerations, customTolerations)
 	})
+
 	t.Run("respect custom nodeselector", func(t *testing.T) {
 		customNodeSelector := map[string]string{
 			"some.nodeSelector.key": "true",
@@ -294,6 +359,21 @@ func TestGenerateDaemonSet(t *testing.T) {
 		require.NotNil(t, daemonset)
 
 		assert.Equal(t, daemonset.Spec.Template.Spec.NodeSelector, customNodeSelector)
+	})
+
+	t.Run("generate a daemonset with no kubernetes cluster name set in env and arg section if no MEID and all scopes set", func(t *testing.T) {
+		dk := createDynakube(true)
+		dk.Status.KubernetesClusterMEID = ""
+
+		reconciler := NewReconciler(nil, fake.NewClient(), dk)
+		daemonset, err := reconciler.generateDaemonSet()
+		require.NoError(t, err)
+		require.NotNil(t, daemonset)
+
+		init := daemonset.Spec.Template.Spec.InitContainers[0]
+		require.NotContains(t, init.Args, fmt.Sprintf("-p dt.entity.kubernetes_cluster=$(%s)", entityEnv))
+
+		require.Nil(t, env.FindEnvVar(init.Env, entityEnv))
 	})
 }
 
@@ -316,7 +396,8 @@ func createDynakube(isEnabled bool) *dynakube.DynaKube {
 			OneAgent: oneagent.Status{
 				ConnectionInfoStatus: oneagent.ConnectionInfoStatus{
 					ConnectionInfo: communication.ConnectionInfo{
-						TenantUUID: "test-uuid",
+						TenantUUID:      "test-uuid",
+						TenantTokenHash: "somehash",
 					},
 				},
 			},
