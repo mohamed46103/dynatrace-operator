@@ -3,18 +3,6 @@ name: PoC - Self-update dry-run check (non-destructive)
 on:
   workflow_dispatch:
 
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Test PoC
-        run: echo "✅ PoC dry-run executed successfully"
-
-
-
-on:
-  workflow_dispatch:
-
 permissions:
   contents: read
 
@@ -28,8 +16,8 @@ jobs:
 
       - name: Explain PoC
         run: |
-          echo "PoC (safe): demonstrating configuration risk in self-update workflow."
-          echo "This run will NOT perform git push, create PRs, or use secrets."
+          echo "✅ PoC (safe): demonstrating configuration risk in self-update workflow."
+          echo "ℹ️ This run will NOT perform git push, create PRs, or use secrets."
 
       - name: Target file reference
         run: |
