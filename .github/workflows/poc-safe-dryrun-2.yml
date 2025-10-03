@@ -1,0 +1,32 @@
+name: PoC - Dry-run check for write-permissions
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  dry-run:
+    name: Dry-run check (non-destructive)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (read-only)
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+
+      - name: Explain PoC
+        run: |
+          echo "PoC (safe): demonstrates where write permissions would be required."
+          echo "No pushes, no secrets used, no destructive actions."
+
+      - name: Create evidence file (safe)
+        run: |
+          echo "Target workflow: .github/workflows/release.yaml" > poc-evidence.txt
+          echo "Observed risky permissions: contents: write / pull-requests: write" >> poc-evidence.txt
+          echo "Run triggered by: $GITHUB_ACTOR on run $GITHUB_RUN_ID" >> poc-evidence.txt
+          cat poc-evidence.txt
+
+      - name: Upload PoC evidence artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: poc-evidence
+          path: poc-evidence.txt
