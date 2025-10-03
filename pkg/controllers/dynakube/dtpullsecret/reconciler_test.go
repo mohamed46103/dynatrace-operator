@@ -22,6 +22,10 @@ import (
 
 const (
 	testPaasToken = "test-paas-token"
+	testName      = "test-name"
+	testNamespace = "test-namespace"
+	testKey       = "test-key"
+	testValue     = "test-value"
 )
 
 type errorClient struct {
@@ -37,7 +41,7 @@ func (clt errorClient) Create(_ context.Context, _ client.Object, _ ...client.Cr
 }
 
 func TestReconciler_Reconcile(t *testing.T) {
-	t.Run(`Create works with minimal setup`, func(t *testing.T) {
+	t.Run("Create works with minimal setup", func(t *testing.T) {
 		dk := createTestDynakube()
 		fakeClient := fake.NewClient()
 		r := NewReconciler(fakeClient, fakeClient, dk, token.Tokens{
@@ -59,7 +63,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 		assert.Contains(t, pullSecret.Data, ".dockerconfigjson")
 		assert.NotEmpty(t, pullSecret.Data[".dockerconfigjson"])
 	})
-	t.Run(`Error when accessing K8s API`, func(t *testing.T) {
+	t.Run("Error when accessing K8s API", func(t *testing.T) {
 		dk := createTestDynakube()
 		fakeClient := errorClient{}
 		r := NewReconciler(fakeClient, fakeClient, dk, token.Tokens{
@@ -69,7 +73,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 		err := r.Reconcile(context.Background())
 		require.Error(t, err)
 	})
-	t.Run(`Error when tenant UUID is missing`, func(t *testing.T) {
+	t.Run("Error when tenant UUID is missing", func(t *testing.T) {
 		dk := &dynakube.DynaKube{
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace: testNamespace,
@@ -87,7 +91,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 		err := r.Reconcile(context.Background())
 		require.Error(t, err)
 	})
-	t.Run(`Error when creating secret`, func(t *testing.T) {
+	t.Run("Error when creating secret", func(t *testing.T) {
 		dk := createTestDynakube()
 		fakeErrorClient := errorClient{}
 		fakeClient := fake.NewClient()
@@ -97,9 +101,9 @@ func TestReconciler_Reconcile(t *testing.T) {
 
 		err := r.Reconcile(context.Background())
 		require.Error(t, err)
-		assert.Equal(t, "failed to create or update secret: failed to create secret test-name-pull-secret: fake error", err.Error())
+		assert.Equal(t, "failed to create or update secret: fake error", err.Error())
 	})
-	t.Run(`Create does not reconcile with custom pull secret`, func(t *testing.T) {
+	t.Run("Create does not reconcile with custom pull secret", func(t *testing.T) {
 		dk := &dynakube.DynaKube{
 			ObjectMeta: metav1.ObjectMeta{
 				Namespace: testNamespace,
@@ -113,7 +117,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 
 		require.NoError(t, err)
 	})
-	t.Run(`Create creates correct docker config`, func(t *testing.T) {
+	t.Run("Create creates correct docker config", func(t *testing.T) {
 		expectedJSON := `{"auths":{"test-api-url":{"username":"test-tenant","password":"test-value","auth":"dGVzdC10ZW5hbnQ6dGVzdC12YWx1ZQ=="}}}`
 		dk := createTestDynakube()
 		fakeClient := fake.NewClient()
@@ -137,7 +141,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 		assert.NotEmpty(t, pullSecret.Data[".dockerconfigjson"])
 		assert.JSONEq(t, expectedJSON, string(pullSecret.Data[".dockerconfigjson"]))
 	})
-	t.Run(`Create update secret if data changed`, func(t *testing.T) {
+	t.Run("Create update secret if data changed", func(t *testing.T) {
 		expectedJSON := `{"auths":{"test-api-url":{"username":"test-tenant","password":"test-value","auth":"dGVzdC10ZW5hbnQ6dGVzdC12YWx1ZQ=="}}}`
 		dk := createTestDynakube()
 		fakeClient := fake.NewClient()
@@ -177,7 +181,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 		assert.NotEmpty(t, pullSecret.Data[".dockerconfigjson"])
 		assert.JSONEq(t, expectedJSON, string(pullSecret.Data[".dockerconfigjson"]))
 	})
-	t.Run(`Reconciliation only runs every 15 min`, func(t *testing.T) {
+	t.Run("Reconciliation only runs every 15 min", func(t *testing.T) {
 		dk := createTestDynakube()
 		fakeClient := fake.NewClient()
 		r := NewReconciler(fakeClient, fakeClient, dk, token.Tokens{
@@ -212,7 +216,7 @@ func TestReconciler_Reconcile(t *testing.T) {
 		assert.NotNil(t, pullSecret)
 		assert.Empty(t, pullSecret.Data)
 	})
-	t.Run(`Cleanup works`, func(t *testing.T) {
+	t.Run("Cleanup works", func(t *testing.T) {
 		dk := createTestDynakube()
 		fakeClient := fake.NewClient()
 		r := NewReconciler(fakeClient, fakeClient, dk, token.Tokens{

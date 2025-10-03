@@ -7,7 +7,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube"
+	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/metadataenrichment"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -17,10 +17,6 @@ func TestGetRulesSetting(t *testing.T) {
 
 	t.Run("get rules", func(t *testing.T) {
 		mockParams := v2APIMockParams{
-			entitiesAPI: entitiesMockParams{
-				status:   http.StatusOK,
-				expected: createMonitoredEntitiesForTesting(),
-			},
 			settingsAPI: settingsMockParams{
 				status:     http.StatusOK,
 				totalCount: 1,
@@ -61,10 +57,6 @@ func TestGetRulesSetting(t *testing.T) {
 
 	t.Run("no monitored-entities, use environment scope -> return not-empty, no error", func(t *testing.T) {
 		mockParams := v2APIMockParams{
-			entitiesAPI: entitiesMockParams{
-				status:   http.StatusOK,
-				expected: []MonitoredEntity{},
-			},
 			settingsAPI: settingsMockParams{
 				status:     http.StatusOK,
 				totalCount: 1,
@@ -98,7 +90,7 @@ func mockGetRulesSettingsAPI(writer http.ResponseWriter, totalCount int) {
 }
 
 func createRulesResponse(totalCount int) GetRulesSettingsResponse {
-	rules := []dynakube.EnrichmentRule{
+	rules := []metadataenrichment.EnrichmentRule{
 		{
 			Source: "rule-1",
 		},

@@ -8,8 +8,11 @@ import (
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/oneagent"
 	"github.com/Dynatrace/dynatrace-operator/pkg/util/installconfig"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
 func TestConflictingOneAgentConfiguration(t *testing.T) {
@@ -289,6 +292,23 @@ func TestImageFieldSetWithoutCSIFlag(t *testing.T) {
 		})
 	})
 
+	t.Run("spec with cloudNative enabled and image name", func(t *testing.T) {
+		testImage := "testImage"
+		assertAllowedWithoutWarnings(t, &dynakube.DynaKube{
+			ObjectMeta: defaultDynakubeObjectMeta,
+			Spec: dynakube.DynaKubeSpec{
+				APIURL: testAPIURL,
+				OneAgent: oneagent.Spec{
+					CloudNativeFullStack: &oneagent.CloudNativeFullStackSpec{
+						AppInjectionSpec: oneagent.AppInjectionSpec{
+							CodeModulesImage: testImage,
+						},
+					},
+				},
+			},
+		})
+	})
+
 	t.Run("spec with appMon enabled, csi driver not enabled but image set", func(t *testing.T) {
 		setupDisabledCSIEnv(t)
 
@@ -299,6 +319,25 @@ func TestImageFieldSetWithoutCSIFlag(t *testing.T) {
 				APIURL: testAPIURL,
 				OneAgent: oneagent.Spec{
 					ApplicationMonitoring: &oneagent.ApplicationMonitoringSpec{
+						AppInjectionSpec: oneagent.AppInjectionSpec{
+							CodeModulesImage: testImage,
+						},
+					},
+				},
+			},
+		})
+	})
+
+	t.Run("spec with cloudNative enabled, csi driver not enabled but image set", func(t *testing.T) {
+		setupDisabledCSIEnv(t)
+
+		testImage := "testImage"
+		assertDenied(t, []string{errorImageFieldSetWithoutCSIFlag}, &dynakube.DynaKube{
+			ObjectMeta: defaultDynakubeObjectMeta,
+			Spec: dynakube.DynaKubeSpec{
+				APIURL: testAPIURL,
+				OneAgent: oneagent.Spec{
+					CloudNativeFullStack: &oneagent.CloudNativeFullStackSpec{
 						AppInjectionSpec: oneagent.AppInjectionSpec{
 							CodeModulesImage: testImage,
 						},
@@ -333,6 +372,31 @@ func TestImageFieldSetWithoutCSIFlag(t *testing.T) {
 		})
 	})
 
+	t.Run("spec with cloudNative enabled, csi driver not enabled but node image pull enabled and image set", func(t *testing.T) {
+		setupDisabledCSIEnv(t)
+
+		testImage := "testImage"
+		assertAllowed(t, &dynakube.DynaKube{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      testName,
+				Namespace: testNamespace,
+				Annotations: map[string]string{
+					exp.OANodeImagePullKey: "true",
+				},
+			},
+			Spec: dynakube.DynaKubeSpec{
+				APIURL: testAPIURL,
+				OneAgent: oneagent.Spec{
+					CloudNativeFullStack: &oneagent.CloudNativeFullStackSpec{
+						AppInjectionSpec: oneagent.AppInjectionSpec{
+							CodeModulesImage: testImage,
+						},
+					},
+				},
+			},
+		})
+	})
+
 	t.Run("spec with appMon enabled, csi driver and node image pull not enabled and image set", func(t *testing.T) {
 		setupDisabledCSIEnv(t)
 
@@ -349,6 +413,31 @@ func TestImageFieldSetWithoutCSIFlag(t *testing.T) {
 				APIURL: testAPIURL,
 				OneAgent: oneagent.Spec{
 					ApplicationMonitoring: &oneagent.ApplicationMonitoringSpec{
+						AppInjectionSpec: oneagent.AppInjectionSpec{
+							CodeModulesImage: testImage,
+						},
+					},
+				},
+			},
+		})
+	})
+
+	t.Run("spec with cloudNative enabled, csi driver and node image pull not enabled and image set", func(t *testing.T) {
+		setupDisabledCSIEnv(t)
+
+		testImage := "testImage"
+		assertDenied(t, []string{errorImageFieldSetWithoutCSIFlag}, &dynakube.DynaKube{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      testName,
+				Namespace: testNamespace,
+				Annotations: map[string]string{
+					exp.OANodeImagePullKey: "false",
+				},
+			},
+			Spec: dynakube.DynaKubeSpec{
+				APIURL: testAPIURL,
+				OneAgent: oneagent.Spec{
+					CloudNativeFullStack: &oneagent.CloudNativeFullStackSpec{
 						AppInjectionSpec: oneagent.AppInjectionSpec{
 							CodeModulesImage: testImage,
 						},
@@ -853,6 +942,101 @@ func TestNoHostIdSourceArgument(t *testing.T) {
 			} else {
 				assertDenied(t, []string{tc.expectedError}, &tc.dk)
 			}
+		})
+	}
+}
+
+func TestDeprecatedOneAgentAutoUpdate(t *testing.T) {
+	baseDK := &dynakube.DynaKube{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "dynakube",
+			Namespace: testNamespace,
+		},
+		Spec: dynakube.DynaKubeSpec{
+			APIURL:   testAPIURL,
+			OneAgent: oneagent.Spec{},
+		},
+	}
+
+	enabled := true
+
+	checkWarnings := func(t *testing.T, warnings admission.Warnings) {
+		t.Helper()
+		require.Len(t, warnings, 1)
+		assert.Contains(t, warnings[0], warningDeprecatedAutoUpdate)
+	}
+
+	testcases := []struct {
+		name       string
+		valid      oneagent.Spec
+		deprecated oneagent.Spec
+	}{
+		{
+			"classic fullstack",
+			oneagent.Spec{ClassicFullStack: &oneagent.HostInjectSpec{}},
+			oneagent.Spec{ClassicFullStack: &oneagent.HostInjectSpec{AutoUpdate: &enabled}},
+		},
+		{
+			"host monitoring",
+			oneagent.Spec{HostMonitoring: &oneagent.HostInjectSpec{}},
+			oneagent.Spec{HostMonitoring: &oneagent.HostInjectSpec{AutoUpdate: &enabled}},
+		},
+		{
+			"cloudnative fullstack",
+			oneagent.Spec{CloudNativeFullStack: &oneagent.CloudNativeFullStackSpec{}},
+			oneagent.Spec{CloudNativeFullStack: &oneagent.CloudNativeFullStackSpec{HostInjectSpec: oneagent.HostInjectSpec{AutoUpdate: &enabled}}},
+		},
+	}
+
+	for _, tc := range testcases {
+		t.Run(tc.name, func(t *testing.T) {
+			validDK := baseDK.DeepCopy()
+			validDK.Spec.OneAgent = tc.valid
+			deprecatedDK := baseDK.DeepCopy()
+			deprecatedDK.Spec.OneAgent = tc.deprecated
+
+			warnings, err := assertAllowed(t, deprecatedDK)
+			require.NoError(t, err, "creation")
+			checkWarnings(t, warnings)
+
+			warnings, err = assertUpdateAllowed(t, validDK, deprecatedDK)
+			require.NoError(t, err, "add deprecated field")
+			checkWarnings(t, warnings)
+
+			assertUpdateAllowedWithoutWarnings(t, deprecatedDK, validDK)
+		})
+	}
+}
+
+func Test_findDuplicates(t *testing.T) {
+	tests := []struct {
+		name   string
+		input  []string
+		expect []string
+	}{
+		{
+			name: "empty",
+		},
+		{
+			name:  "no duplicates",
+			input: []string{"foo", "bar", "baz"},
+		},
+		{
+			name:   "single duplicates",
+			input:  []string{"foo", "bar", "bar", "foo", "baz"},
+			expect: []string{"bar", "foo"},
+		},
+		{
+			name:   "multiple duplicates",
+			input:  []string{"foo", "bar", "bar", "bar", "foo", "baz", "foo"},
+			expect: []string{"bar", "foo"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			got := findDuplicates(test.input)
+			assert.Equal(t, test.expect, got)
 		})
 	}
 }

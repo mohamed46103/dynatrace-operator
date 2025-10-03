@@ -1,25 +1,23 @@
 #renovate depName=sigs.k8s.io/kustomize/kustomize/v5
-kustomize_version=v5.7.0
+kustomize_version=v5.7.1
 #renovate depName=sigs.k8s.io/controller-tools/cmd
-controller_gen_version=v0.18.0
+controller_gen_version=v0.19.0
 # renovate depName=github.com/golangci/golangci-lint/v2
-golang_ci_cmd_version=v2.1.6
+golang_ci_cmd_version=v2.5.0
 # renovate depName=github.com/daixiang0/gci
-gci_version=v0.13.6
+gci_version=v0.13.7
 # renovate depName=golang.org/x/tools
-golang_tools_version=v0.34.0
+golang_tools_version=v0.37.0
 # renovate depName=github.com/vektra/mockery
-mockery_version=v2.53.4
+mockery_version=v3.5.5
 # renovate depName=github.com/igorshubovych/markdownlint-cli
 markdownlint_cli_version=v0.45.0
 # renovate depName=github.com/helm-unittest/helm-unittest
-helmunittest_version=v0.8.2
+helmunittest_version=v1.0.2
 # renovate depName=github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod
 cyclonedx_gomod_version=v1.9.0
 
-ENVTEST_VERSION ?= $(shell go list -m -f "{{ .Version }}" sigs.k8s.io/controller-runtime | awk -F'[v.]' '{printf "release-%d.%d", $$2, $$3}')
-# ENVTEST_K8S_VERSION ?= $(shell go list -m -f "{{ .Version }}" k8s.io/api | awk -F'[v.]' '{printf "1.%d", $$3}')
-ENVTEST_K8S_VERSION = 1.32 # TODO: change it when env test list add it and cotroller-runtime lib updated
+ENVTEST_K8S_VERSION = $(shell go list -m -f "{{ .Version }}" k8s.io/api | sed 's/v0/1/' )
 
 # Get the currently used golang install path (in GOPATH/bin, unless GOBIN is set)
 ifeq (,$(shell go env GOBIN))
@@ -42,9 +40,7 @@ CONTROLLER_GEN=$(shell hack/build/command.sh controller-gen)
 ## Install go linters
 prerequisites/go-linting: prerequisites/go-deadcode
 	go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(golang_ci_cmd_version)
-	go install github.com/daixiang0/gci@$(gci_version)
 	go install golang.org/x/tools/cmd/goimports@$(golang_tools_version)
-	go install github.com/bombsimon/wsl/v4/cmd...@master
 	go install github.com/dkorunic/betteralign/cmd/betteralign@latest
 
 ## Install go deadcode
@@ -61,10 +57,13 @@ prerequisites/envtest:
 
 prerequisites/setup-envtest: prerequisites/envtest
 	@echo "Setting up envtest binaries for Kubernetes version $(ENVTEST_K8S_VERSION)..."
-	setup-envtest use $(ENVTEST_K8S_VERSION) --bin-dir $(GOBIN) -p path || { \
+	@setup-envtest use $(ENVTEST_K8S_VERSION) --bin-dir $(GOBIN) -p path || { \
 		echo "Error: Failed to set up envtest binaries for version $(ENVTEST_K8S_VERSION)."; \
 		exit 1; \
 	}
+	@echo
+	@setup-envtest cleanup "<$(ENVTEST_K8S_VERSION)" --bin-dir $(GOBIN)
+	@echo "Setup of envtest binaries completed."
 
 ## Install 'helm' if it is missing
 ## TODO: Have version accessible by renovate?
@@ -82,7 +81,7 @@ prerequisites/markdownlint:
 
 ## Install verktra/mockery
 prerequisites/mockery:
-	go install github.com/vektra/mockery/v2@$(mockery_version)
+	go install github.com/vektra/mockery/v3@$(mockery_version)
 
 ## Install 'pre-commit' if it is missing
 prerequisites/setup-pre-commit:

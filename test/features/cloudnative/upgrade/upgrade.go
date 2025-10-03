@@ -5,7 +5,7 @@ package upgrade
 import (
 	"testing"
 
-	dynakubev1beta4 "github.com/Dynatrace/dynatrace-operator/pkg/api/v1beta4/dynakube"
+	dynakubev1beta5 "github.com/Dynatrace/dynatrace-operator/pkg/api/v1beta5/dynakube"
 	"github.com/Dynatrace/dynatrace-operator/test/features/cloudnative"
 	"github.com/Dynatrace/dynatrace-operator/test/helpers"
 	"github.com/Dynatrace/dynatrace-operator/test/helpers/components/dynakube"
@@ -31,13 +31,12 @@ func Feature(t *testing.T) features.Feature {
 	)
 	builder.Assess("create sample namespace", sampleApp.InstallNamespace())
 
-	previousVersionDynakube := &dynakubev1beta4.DynaKube{}
+	previousVersionDynakube := &dynakubev1beta5.DynaKube{}
 	previousVersionDynakube.ConvertFrom(&testDynakube)
 	dynakube.InstallPreviousVersion(builder, helpers.LevelAssess, &secretConfig, *previousVersionDynakube)
 
 	// Register sample app install
 	builder.Assess("install sample app", sampleApp.Install())
-	cloudnative.AssessSampleInitContainers(builder, sampleApp)
 
 	// update to snapshot
 	withCSI := true

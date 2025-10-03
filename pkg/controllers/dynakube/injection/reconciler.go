@@ -10,13 +10,10 @@ import (
 	"github.com/Dynatrace/dynatrace-operator/pkg/controllers"
 	oaconnectioninfo "github.com/Dynatrace/dynatrace-operator/pkg/controllers/dynakube/connectioninfo/oneagent"
 	"github.com/Dynatrace/dynatrace-operator/pkg/controllers/dynakube/istio"
+	"github.com/Dynatrace/dynatrace-operator/pkg/controllers/dynakube/k8sentity"
 	"github.com/Dynatrace/dynatrace-operator/pkg/controllers/dynakube/metadata/rules"
-	"github.com/Dynatrace/dynatrace-operator/pkg/controllers/dynakube/monitoredentities"
-	"github.com/Dynatrace/dynatrace-operator/pkg/controllers/dynakube/processmoduleconfigsecret"
 	"github.com/Dynatrace/dynatrace-operator/pkg/controllers/dynakube/version"
 	"github.com/Dynatrace/dynatrace-operator/pkg/injection/namespace/bootstrapperconfig"
-	"github.com/Dynatrace/dynatrace-operator/pkg/injection/namespace/ingestendpoint"
-	"github.com/Dynatrace/dynatrace-operator/pkg/injection/namespace/initgeneration"
 	"github.com/Dynatrace/dynatrace-operator/pkg/injection/namespace/mapper"
 	"github.com/Dynatrace/dynatrace-operator/pkg/util/conditions"
 	"github.com/Dynatrace/dynatrace-operator/pkg/util/timeprovider"
@@ -24,17 +21,16 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
-type reconciler struct {
-	client                      client.Client
-	apiReader                   client.Reader
-	dk                          *dynakube.DynaKube
-	istioReconciler             istio.Reconciler
-	versionReconciler           version.Reconciler
-	pmcSecretreconciler         controllers.Reconciler
-	connectionInfoReconciler    controllers.Reconciler
-	monitoredEntitiesReconciler controllers.Reconciler
-	enrichmentRulesReconciler   controllers.Reconciler
-	dynatraceClient             dynatrace.Client
+type Reconciler struct {
+	client                    client.Client
+	apiReader                 client.Reader
+	dk                        *dynakube.DynaKube
+	istioReconciler           istio.Reconciler
+	versionReconciler         version.Reconciler
+	connectionInfoReconciler  controllers.Reconciler
+	k8sEntityReconciler       controllers.Reconciler
+	enrichmentRulesReconciler controllers.Reconciler
+	dynatraceClient           dynatrace.Client
 }
 
 type ReconcilerBuilder func(
@@ -59,36 +55,20 @@ func NewReconciler(
 		istioReconciler = istio.NewReconciler(istioClient)
 	}
 
-	return &reconciler{
-		client:            client,
-		apiReader:         apiReader,
-		dk:                dk,
-		dynatraceClient:   dynatraceClient,
-		istioReconciler:   istioReconciler,
-		versionReconciler: version.NewReconciler(apiReader, dynatraceClient, timeprovider.New().Freeze()),
-		pmcSecretreconciler: processmoduleconfigsecret.NewReconciler(
-			client, apiReader, dynatraceClient, dk, timeprovider.New().Freeze()),
-		connectionInfoReconciler:    oaconnectioninfo.NewReconciler(client, apiReader, dynatraceClient, dk),
-		enrichmentRulesReconciler:   rules.NewReconciler(dynatraceClient, dk),
-		monitoredEntitiesReconciler: monitoredentities.NewReconciler(dynatraceClient, dk),
+	return &Reconciler{
+		client:                    client,
+		apiReader:                 apiReader,
+		dk:                        dk,
+		dynatraceClient:           dynatraceClient,
+		istioReconciler:           istioReconciler,
+		versionReconciler:         version.NewReconciler(apiReader, dynatraceClient, timeprovider.New().Freeze()),
+		connectionInfoReconciler:  oaconnectioninfo.NewReconciler(client, apiReader, dynatraceClient, dk),
+		enrichmentRulesReconciler: rules.NewReconciler(dynatraceClient, dk),
+		k8sEntityReconciler:       k8sentity.NewReconciler(dynatraceClient, dk),
 	}
 }
 
-func (r *reconciler) Reconcile(ctx context.Context) error {
-	// because the 2 injection type we have share the label that the webhook is listening to, we can only clean that label up if both are disabled
-	// but we should only clean-up the labels after everything else is cleaned up because the clean-up for the secrets depend on the label still being there
-	// but we have to do the mapping before everything when its necessary
-	if !r.dk.OneAgent().IsAppInjectionNeeded() && !r.dk.MetadataEnrichmentEnabled() {
-		defer r.unmapDynakube(ctx)
-	} else {
-		dkMapper := r.createDynakubeMapper(ctx)
-		if err := dkMapper.MapFromDynakube(); err != nil {
-			log.Info("update of a map of namespaces failed")
-
-			return err
-		}
-	}
-
+func (r *Reconciler) Reconcile(ctx context.Context) error {
 	var setupErrors []error
 	if err := r.setupOneAgentInjection(ctx); err != nil {
 		setupErrors = append(setupErrors, err)
@@ -102,20 +82,47 @@ func (r *reconciler) Reconcile(ctx context.Context) error {
 		return goerrors.Join(setupErrors...)
 	}
 
+	if !r.dk.OneAgent().IsAppInjectionNeeded() && !r.dk.MetadataEnrichment().IsEnabled() {
+		defer r.cleanup(ctx)
+	} else {
+		dkMapper := r.createDynakubeMapper(ctx)
+		if err := dkMapper.MapFromDynakube(); err != nil {
+			log.Info("update of a map of namespaces failed")
+
+			setupErrors = append(setupErrors, err)
+		}
+
+		err := r.generateInitSecret(ctx)
+		if err != nil {
+			setupErrors = append(setupErrors, err)
+		}
+	}
+
+	if len(setupErrors) > 0 {
+		return goerrors.Join(setupErrors...)
+	}
+
 	log.Info("app injection reconciled")
 
 	return nil
 }
 
-func (r *reconciler) unmapDynakube(ctx context.Context) {
-	if meta.FindStatusCondition(*r.dk.Conditions(), codeModulesInjectionConditionType) != nil &&
-		meta.FindStatusCondition(*r.dk.Conditions(), metaDataEnrichmentConditionType) != nil {
+func (r *Reconciler) cleanup(ctx context.Context) {
+	if meta.FindStatusCondition(*r.dk.Conditions(), codeModulesInjectionConditionType) == nil &&
+		meta.FindStatusCondition(*r.dk.Conditions(), metaDataEnrichmentConditionType) == nil {
 		return
 	}
+	defer meta.RemoveStatusCondition(r.dk.Conditions(), codeModulesInjectionConditionType)
+	defer meta.RemoveStatusCondition(r.dk.Conditions(), metaDataEnrichmentConditionType)
 
 	namespaces, err := mapper.GetNamespacesForDynakube(ctx, r.apiReader, r.dk.Name)
 	if err != nil {
 		log.Error(err, "failed to list namespaces for dynakube", "dkName", r.dk.Name)
+	}
+
+	err = bootstrapperconfig.Cleanup(ctx, r.client, r.apiReader, namespaces, r.dk)
+	if err != nil {
+		log.Error(err, "failed to clean-up bootstrapper code module injection init-secrets")
 	}
 
 	dkMapper := r.createDynakubeMapper(ctx)
@@ -124,7 +131,7 @@ func (r *reconciler) unmapDynakube(ctx context.Context) {
 	}
 }
 
-func (r *reconciler) setupOneAgentInjection(ctx context.Context) error {
+func (r *Reconciler) setupOneAgentInjection(ctx context.Context) error {
 	err := r.versionReconciler.ReconcileCodeModules(ctx, r.dk)
 	if err != nil {
 		return err
@@ -135,28 +142,15 @@ func (r *reconciler) setupOneAgentInjection(ctx context.Context) error {
 		return err
 	}
 
-	err = r.pmcSecretreconciler.Reconcile(ctx)
-	if err != nil {
-		return err
-	}
-
 	if r.istioReconciler != nil {
 		err = r.istioReconciler.ReconcileCodeModuleCommunicationHosts(ctx, r.dk)
-
 		if err != nil {
 			log.Error(err, "error reconciling istio configuration for codemodules")
 		}
 	}
 
 	if !r.dk.OneAgent().IsAppInjectionNeeded() {
-		r.cleanupOneAgentInjection(ctx)
-
 		return nil
-	}
-
-	err = r.generateCorrectInitSecret(ctx)
-	if err != nil {
-		return err
 	}
 
 	if r.dk.OneAgent().IsApplicationMonitoringMode() {
@@ -168,58 +162,21 @@ func (r *reconciler) setupOneAgentInjection(ctx context.Context) error {
 	return nil
 }
 
-func (r *reconciler) generateCorrectInitSecret(ctx context.Context) error {
-	var err error
-	if r.dk.FF().IsNodeImagePull() {
-		err = bootstrapperconfig.NewSecretGenerator(r.client, r.apiReader, r.dynatraceClient).GenerateForDynakube(ctx, r.dk)
-		if err != nil {
-			if conditions.IsKubeAPIError(err) {
-				conditions.SetKubeAPIError(r.dk.Conditions(), codeModulesInjectionConditionType, err)
-			}
-
-			return err
+func (r *Reconciler) generateInitSecret(ctx context.Context) error {
+	err := bootstrapperconfig.NewSecretGenerator(r.client, r.apiReader, r.dynatraceClient).GenerateForDynakube(ctx, r.dk)
+	if err != nil {
+		if conditions.IsKubeAPIError(err) {
+			conditions.SetKubeAPIError(r.dk.Conditions(), codeModulesInjectionConditionType, err)
 		}
+
+		return err
 	}
 
-	if !r.dk.FF().IsNodeImagePull() || r.dk.OneAgent().IsCSIAvailable() {
-		err = initgeneration.NewInitGenerator(r.client, r.apiReader, r.dk.Namespace).GenerateForDynakube(ctx, r.dk)
-		if err != nil {
-			if conditions.IsKubeAPIError(err) {
-				conditions.SetKubeAPIError(r.dk.Conditions(), codeModulesInjectionConditionType, err)
-			}
-
-			return err
-		}
-	}
-
-	return err
+	return nil
 }
 
-func (r *reconciler) cleanupOneAgentInjection(ctx context.Context) {
-	if meta.FindStatusCondition(*r.dk.Conditions(), codeModulesInjectionConditionType) != nil {
-		defer meta.RemoveStatusCondition(r.dk.Conditions(), codeModulesInjectionConditionType)
-
-		namespaces, err := mapper.GetNamespacesForDynakube(ctx, r.apiReader, r.dk.Name)
-		if err != nil {
-			log.Error(err, "failed to list injected namespace during code module injection cleanup")
-
-			return
-		}
-
-		err = bootstrapperconfig.Cleanup(ctx, r.client, r.apiReader, namespaces, r.dk)
-		if err != nil {
-			log.Error(err, "failed to clean-up bootstrapper code module injection init-secrets")
-		}
-
-		err = initgeneration.NewInitGenerator(r.client, r.apiReader, r.dk.Namespace).Cleanup(ctx, namespaces)
-		if err != nil {
-			log.Error(err, "failed to clean-up code module injection init-secrets")
-		}
-	}
-}
-
-func (r *reconciler) setupEnrichmentInjection(ctx context.Context) error {
-	err := r.monitoredEntitiesReconciler.Reconcile(ctx)
+func (r *Reconciler) setupEnrichmentInjection(ctx context.Context) error {
+	err := r.k8sEntityReconciler.Reconcile(ctx)
 	if err != nil {
 		return err
 	}
@@ -231,21 +188,8 @@ func (r *reconciler) setupEnrichmentInjection(ctx context.Context) error {
 		return err
 	}
 
-	if !r.dk.MetadataEnrichmentEnabled() {
-		r.cleanupEnrichmentInjection(ctx)
-
+	if !r.dk.MetadataEnrichment().IsEnabled() {
 		return nil
-	}
-
-	endpointSecretGenerator := ingestendpoint.NewSecretGenerator(r.client, r.apiReader, r.dk.Namespace)
-
-	err = endpointSecretGenerator.GenerateForDynakube(ctx, r.dk)
-	if err != nil {
-		if conditions.IsKubeAPIError(err) {
-			conditions.SetKubeAPIError(r.dk.Conditions(), metaDataEnrichmentConditionType, err)
-		}
-
-		return err
 	}
 
 	setMetadataEnrichmentCreatedCondition(r.dk.Conditions())
@@ -253,25 +197,7 @@ func (r *reconciler) setupEnrichmentInjection(ctx context.Context) error {
 	return nil
 }
 
-func (r *reconciler) cleanupEnrichmentInjection(ctx context.Context) {
-	if meta.FindStatusCondition(*r.dk.Conditions(), metaDataEnrichmentConditionType) != nil {
-		defer meta.RemoveStatusCondition(r.dk.Conditions(), metaDataEnrichmentConditionType)
-
-		namespaces, err := mapper.GetNamespacesForDynakube(ctx, r.apiReader, r.dk.Name)
-		if err != nil {
-			log.Error(err, "failed to list injected namespace during metadata-enrichment injection cleanup")
-
-			return
-		}
-
-		err = ingestendpoint.NewSecretGenerator(r.client, r.apiReader, r.dk.Namespace).RemoveEndpointSecrets(ctx, namespaces)
-		if err != nil {
-			log.Error(err, "failed to clean-up metadata-enrichment injection secrets")
-		}
-	}
-}
-
-func (r *reconciler) createDynakubeMapper(ctx context.Context) *mapper.DynakubeMapper {
+func (r *Reconciler) createDynakubeMapper(ctx context.Context) *mapper.DynakubeMapper {
 	operatorNamespace := r.dk.GetNamespace()
 	dkMapper := mapper.NewDynakubeMapper(ctx, r.client, r.apiReader, operatorNamespace, r.dk)
 

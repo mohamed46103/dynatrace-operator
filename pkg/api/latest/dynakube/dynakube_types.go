@@ -1,14 +1,17 @@
 // +kubebuilder:object:generate=true
 // +groupName=dynatrace.com
-// +versionName=v1beta5
+// +versionName=v1beta6
 package dynakube
 
 import (
-	v1beta5 "github.com/Dynatrace/dynatrace-operator/pkg/api/latest"
+	v1beta6 "github.com/Dynatrace/dynatrace-operator/pkg/api/latest"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/activegate"
+	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/extensions"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/kspm"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/logmonitoring"
+	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/metadataenrichment"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/oneagent"
+	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/otlpexporterconfiguration"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/telemetryingest"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/shared/value"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -67,7 +70,7 @@ type DynaKubeSpec struct { //nolint:revive
 	// Configuration for Metadata Enrichment.
 	// +kubebuilder:validation:Optional
 	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="Metadata Enrichment",order=9,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
-	MetadataEnrichment MetadataEnrichment `json:"metadataEnrichment,omitempty"`
+	MetadataEnrichment metadataenrichment.Spec `json:"metadataEnrichment,omitempty"`
 
 	// Set custom proxy settings either directly or from a secret with the field proxy.
 	// Note: Applies to Dynatrace Operator, ActiveGate, and OneAgents.
@@ -91,11 +94,16 @@ type DynaKubeSpec struct { //nolint:revive
 	// When an (empty) ExtensionsSpec is provided, the extensions related components (extensions controller and extensions collector)
 	// are deployed by the operator.
 	// +kubebuilder:validation:Optional
-	Extensions *ExtensionsSpec `json:"extensions,omitempty"`
+	Extensions *extensions.Spec `json:"extensions,omitempty"`
 
 	// When a TelemetryIngestSpec is provided, the OTEL collector is deployed by the operator.
 	// +kubebuilder:validation:Optional
 	TelemetryIngest *telemetryingest.Spec `json:"telemetryIngest,omitempty"`
+
+	// Configuration for OTLP Exporter Configuration
+	// +kubebuilder:validation:Optional
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,displayName="OTLP Exporter Configuration",order=9,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:advanced"}
+	OTLPExporterConfiguration *otlpexporterconfiguration.Spec `json:"otlpExporterConfiguration,omitempty"`
 
 	// General configuration about OneAgent instances.
 	// You can't enable more than one module (classicFullStack, cloudNativeFullStack, hostMonitoring, or applicationMonitoring).
@@ -162,7 +170,9 @@ type TemplatesSpec struct {
 	// +kubebuilder:validation:Optional
 	OpenTelemetryCollector OpenTelemetryCollectorSpec `json:"otelCollector,omitempty"`
 	// +kubebuilder:validation:Optional
-	ExtensionExecutionController ExtensionExecutionControllerSpec `json:"extensionExecutionController,omitempty"`
+	DatabaseExecutor extensions.DatabaseExecutorSpec `json:"databaseExecutor,omitempty"`
+	// +kubebuilder:validation:Optional
+	ExtensionExecutionController extensions.ExecutionControllerSpec `json:"extensionExecutionController,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
@@ -176,5 +186,5 @@ type DynaKubeList struct { //nolint:revive
 }
 
 func init() {
-	v1beta5.SchemeBuilder.Register(&DynaKube{}, &DynaKubeList{})
+	v1beta6.SchemeBuilder.Register(&DynaKube{}, &DynaKubeList{})
 }

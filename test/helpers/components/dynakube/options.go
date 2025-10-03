@@ -5,6 +5,7 @@ package dynakube
 import (
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/activegate"
+	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/extensions"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/logmonitoring"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/oneagent"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/telemetryingest"
@@ -177,7 +178,7 @@ func WithApplicationMonitoringSpec(applicationMonitoringSpec *oneagent.Applicati
 func WithExtensionsEnabledSpec(promEnabled bool) Option {
 	return func(dk *dynakube.DynaKube) {
 		if promEnabled {
-			dk.Spec.Extensions = &dynakube.ExtensionsSpec{}
+			dk.Spec.Extensions = &extensions.Spec{PrometheusSpec: &extensions.PrometheusSpec{}}
 			dk.Spec.Templates.ExtensionExecutionController.UseEphemeralVolume = true
 		} else {
 			dk.Spec.Extensions = nil
@@ -191,12 +192,6 @@ func WithExtensionsEECImageRefSpec(repo, tag string) Option {
 			Repository: repo,
 			Tag:        tag,
 		}
-	}
-}
-
-func WithCustomPullSecret(secretName string) Option {
-	return func(dk *dynakube.DynaKube) {
-		dk.Spec.CustomPullSecret = secretName
 	}
 }
 

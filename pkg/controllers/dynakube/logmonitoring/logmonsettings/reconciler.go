@@ -2,12 +2,12 @@ package logmonsettings
 
 import (
 	"context"
+	"strings"
 
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/logmonitoring"
 	dtclient "github.com/Dynatrace/dynatrace-operator/pkg/clients/dynatrace"
 	"github.com/Dynatrace/dynatrace-operator/pkg/controllers"
-	"github.com/Dynatrace/dynatrace-operator/pkg/controllers/dynakube/logmonitoring/daemonset"
 	"github.com/Dynatrace/dynatrace-operator/pkg/util/conditions"
 	"github.com/Dynatrace/dynatrace-operator/pkg/util/timeprovider"
 	"github.com/pkg/errors"
@@ -39,13 +39,31 @@ func (r *reconciler) Reconcile(ctx context.Context) error {
 	}
 
 	if !r.dk.LogMonitoring().IsEnabled() {
-		meta.RemoveStatusCondition(r.dk.Conditions(), ConditionType)
+		_ = meta.RemoveStatusCondition(r.dk.Conditions(), ConditionType)
 
 		return nil
-	} else if r.dk.Status.KubernetesClusterMEID == "" {
-		log.Info("Kubernetes settings are not yet available, which are needed for LogMonitoring, will requeue")
+	}
 
-		return daemonset.KubernetesSettingsNotAvailableError
+	hasReadScope := conditions.IsOptionalScopeAvailable(r.dk, dtclient.ConditionTypeAPITokenSettingsRead)
+	hasWriteScope := conditions.IsOptionalScopeAvailable(r.dk, dtclient.ConditionTypeAPITokenSettingsWrite)
+
+	var missingScopes []string
+	if !hasReadScope {
+		missingScopes = append(missingScopes, dtclient.TokenScopeSettingsRead)
+	}
+
+	if !hasWriteScope {
+		missingScopes = append(missingScopes, dtclient.TokenScopeSettingsWrite)
+	}
+
+	if len(missingScopes) > 0 {
+		message := strings.Join(missingScopes, ", ") + " scope(s) missing: cannot query existing log monitoring setting and/or safely create new one."
+		conditions.SetOptionalScopeMissing(r.dk.Conditions(), ConditionType, message)
+		log.Info(message)
+
+		return nil
+	} else {
+		log.Info("necessary scopes for logmonitoring settings creation is available, proceeding with reconciliation")
 	}
 
 	err := r.checkLogMonitoringSettings(ctx)
@@ -59,9 +77,18 @@ func (r *reconciler) Reconcile(ctx context.Context) error {
 func (r *reconciler) checkLogMonitoringSettings(ctx context.Context) error {
 	log.Info("start reconciling log monitoring settings")
 
+	if r.dk.Status.KubernetesClusterMEID == "" {
+		msg := "kubernetesClusterMEID is not available, which is needed for logmonitoring settings creation, will skip it for now"
+		log.Info(msg)
+
+		setSkippedCondition(r.dk.Conditions(), msg)
+
+		return nil
+	}
+
 	logMonitoringSettings, err := r.dtc.GetSettingsForLogModule(ctx, r.dk.Status.KubernetesClusterMEID)
 	if err != nil {
-		setLogMonitoringSettingError(r.dk.Conditions(), ConditionType, err.Error())
+		setErrorCondition(r.dk.Conditions(), err.Error())
 
 		return errors.WithMessage(err, "error trying to check if setting exists")
 	}
@@ -69,7 +96,7 @@ func (r *reconciler) checkLogMonitoringSettings(ctx context.Context) error {
 	if logMonitoringSettings.TotalCount > 0 {
 		log.Info("there are already settings", "settings", logMonitoringSettings)
 
-		setLogMonitoringSettingExists(r.dk.Conditions(), ConditionType)
+		setAlreadyExistsCondition(r.dk.Conditions())
 
 		return nil
 	}
@@ -80,14 +107,14 @@ func (r *reconciler) checkLogMonitoringSettings(ctx context.Context) error {
 	}
 
 	objectID, err := r.dtc.CreateLogMonitoringSetting(ctx, r.dk.Status.KubernetesClusterMEID, r.dk.Status.KubernetesClusterName, matchers)
-
 	if err != nil {
-		setLogMonitoringSettingError(r.dk.Conditions(), ConditionType, err.Error())
+		setErrorCondition(r.dk.Conditions(), err.Error())
 
 		return err
 	}
 
-	log.Info("logmonitoring setting created", "settings", objectID)
+	setCreatedCondition(r.dk.Conditions())
+	log.Info("log monitoring setting created", "settings", objectID)
 
 	return nil
 }

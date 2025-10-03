@@ -8,12 +8,12 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/Dynatrace/dynatrace-operator/cmd/bootstrapper"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/oneagent"
 	"github.com/Dynatrace/dynatrace-operator/pkg/consts"
-	"github.com/Dynatrace/dynatrace-operator/pkg/util/kubeobjects/env"
 	maputil "github.com/Dynatrace/dynatrace-operator/pkg/util/map"
-	metacommon "github.com/Dynatrace/dynatrace-operator/pkg/webhook/mutation/pod/common/metadata"
-	oacommon "github.com/Dynatrace/dynatrace-operator/pkg/webhook/mutation/pod/common/oneagent"
+	metacommon "github.com/Dynatrace/dynatrace-operator/pkg/webhook/mutation/pod/mutator/metadata"
+	oacommon "github.com/Dynatrace/dynatrace-operator/pkg/webhook/mutation/pod/mutator/oneagent"
 	"github.com/Dynatrace/dynatrace-operator/test/helpers"
 	dynakubeComponents "github.com/Dynatrace/dynatrace-operator/test/helpers/components/dynakube"
 	"github.com/Dynatrace/dynatrace-operator/test/helpers/kubeobjects/deployment"
@@ -61,7 +61,7 @@ func MetadataEnrichment(t *testing.T) features.Feature {
 
 	injectEverythingLabels := maputil.MergeMap(
 		testDynakube.OneAgent().GetNamespaceSelector().MatchLabels,
-		testDynakube.MetadataEnrichmentNamespaceSelector().MatchLabels,
+		testDynakube.MetadataEnrichment().GetNamespaceSelector().MatchLabels,
 	)
 
 	testCases := []testCase{
@@ -93,7 +93,7 @@ func MetadataEnrichment(t *testing.T) features.Feature {
 			app: sample.NewApp(t, &testDynakube,
 				sample.WithName("deploy-metadata-label"),
 				sample.AsDeployment(),
-				sample.WithNamespaceLabels(testDynakube.MetadataEnrichmentNamespaceSelector().MatchLabels),
+				sample.WithNamespaceLabels(testDynakube.MetadataEnrichment().GetNamespaceSelector().MatchLabels),
 			),
 			assess: deploymentPodsHaveOnlyMetadataEnrichmentInitContainer,
 		},
@@ -101,7 +101,7 @@ func MetadataEnrichment(t *testing.T) features.Feature {
 			name: "control metadata-enrichment with namespace-selector - pod",
 			app: sample.NewApp(t, &testDynakube,
 				sample.WithName("pod-metadata-label"),
-				sample.WithNamespaceLabels(testDynakube.MetadataEnrichmentNamespaceSelector().MatchLabels),
+				sample.WithNamespaceLabels(testDynakube.MetadataEnrichment().GetNamespaceSelector().MatchLabels),
 			),
 			assess: podHasOnlyMetadataEnrichmentInitContainer,
 		},
@@ -186,21 +186,12 @@ func deploymentPodsHaveOnlyMetadataEnrichmentInitContainer(sampleApp *sample.App
 }
 
 // podHasCompleteInitContainer checks if the sample has BOTH the metadata-enrichment and oneagent parts added to it.
-func podHasCompleteInitContainer(samplePod *sample.App) features.Func { //nolint:dupl
+func podHasCompleteInitContainer(samplePod *sample.App) features.Func {
 	return func(ctx context.Context, t *testing.T, envConfig *envconf.Config) context.Context {
 		testPod := samplePod.GetPods(ctx, t, envConfig.Client().Resources()).Items[0]
 		initContainers := testPod.Spec.InitContainers
 
 		require.Len(t, initContainers, 1)
-
-		installOneAgentContainer := initContainers[0]
-		envVars := installOneAgentContainer.Env
-
-		assert.True(t, env.IsIn(envVars, consts.EnrichmentWorkloadKindEnv))
-		assert.True(t, env.IsIn(envVars, consts.EnrichmentWorkloadNameEnv))
-		assert.True(t, env.IsIn(envVars, consts.EnrichmentInjectedEnv))
-
-		assert.True(t, env.IsIn(envVars, consts.AgentInjectedEnv))
 
 		assert.Contains(t, testPod.Annotations, metacommon.AnnotationWorkloadKind)
 		assert.Contains(t, testPod.Annotations, metacommon.AnnotationWorkloadName)
@@ -209,21 +200,12 @@ func podHasCompleteInitContainer(samplePod *sample.App) features.Func { //nolint
 	}
 }
 
-func podHasOnlyOneAgentInitContainer(samplePod *sample.App) features.Func { //nolint:dupl
+func podHasOnlyOneAgentInitContainer(samplePod *sample.App) features.Func {
 	return func(ctx context.Context, t *testing.T, envConfig *envconf.Config) context.Context {
 		testPod := samplePod.GetPods(ctx, t, envConfig.Client().Resources()).Items[0]
 		initContainers := testPod.Spec.InitContainers
 
 		require.Len(t, initContainers, 1)
-
-		installOneAgentContainer := initContainers[0]
-		envVars := installOneAgentContainer.Env
-
-		assert.False(t, env.IsIn(envVars, consts.EnrichmentWorkloadKindEnv))
-		assert.False(t, env.IsIn(envVars, consts.EnrichmentWorkloadNameEnv))
-		assert.False(t, env.IsIn(envVars, consts.EnrichmentInjectedEnv))
-
-		assert.True(t, env.IsIn(envVars, consts.AgentInjectedEnv))
 
 		assert.NotContains(t, testPod.Annotations, metacommon.AnnotationWorkloadKind)
 		assert.NotContains(t, testPod.Annotations, metacommon.AnnotationWorkloadName)
@@ -266,15 +248,10 @@ func assessOnlyMetadataEnrichmentIsInjected(t *testing.T) deployment.PodConsumer
 
 		require.Len(t, initContainers, 1)
 
-		installOneAgentContainer := initContainers[0]
-		envVars := installOneAgentContainer.Env
-
-		assert.True(t, env.IsIn(envVars, consts.EnrichmentWorkloadKindEnv))
-		assert.True(t, env.IsIn(envVars, consts.EnrichmentWorkloadNameEnv))
-		assert.True(t, env.IsIn(envVars, consts.EnrichmentInjectedEnv))
-
-		assert.False(t, env.IsIn(envVars, consts.AgentInjectedEnv))
-
+		// The `--metadata-enrichment` is what turns on the feature in the init-container
+		assert.Contains(t, initContainers[0].Args, "--"+bootstrapper.MetadataEnrichmentFlag)
+		// The `--target=/mnt/bin` is a sign that the init-container will download/configure the oneagent
+		assert.NotContains(t, initContainers[0].Args, "--"+bootstrapper.TargetFolderFlag+"="+consts.AgentInitBinDirMount)
 		assert.Contains(t, pod.Annotations, metacommon.AnnotationWorkloadKind)
 		assert.Contains(t, pod.Annotations, metacommon.AnnotationWorkloadName)
 	}

@@ -2,6 +2,7 @@ package token
 
 import (
 	"context"
+	"maps"
 	"strings"
 
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube"
@@ -27,22 +28,42 @@ func (token *Token) addFeatures(features []Feature) {
 	token.Features = append(token.Features, features...)
 }
 
-func (token *Token) verifyScopes(ctx context.Context, dtClient dtclient.Client, dk dynakube.DynaKube) error {
+func (token *Token) verifyScopes(ctx context.Context, dtClient dtclient.Client, dk dynakube.DynaKube) (map[string]bool, error) {
 	if len(token.Features) == 0 {
-		return nil
+		return map[string]bool{}, nil
 	}
 
 	scopes, err := dtClient.GetTokenScopes(ctx, token.Value)
 	if err != nil {
-		return err
+		return nil, err
 	}
 
+	err = token.verifyRequiredScopes(scopes, dk)
+
+	optionalScopes := token.collectOptionalScopes(scopes, dk)
+
+	missingOptionalScopes := []string{}
+
+	for scope, isAvailable := range optionalScopes {
+		if !isAvailable {
+			missingOptionalScopes = append(missingOptionalScopes, scope)
+		}
+	}
+
+	if len(missingOptionalScopes) > 0 {
+		log.Info("some optional scopes are missing", "missing scopes", missingOptionalScopes, "token", token.Type)
+	}
+
+	return optionalScopes, err
+}
+
+func (token *Token) verifyRequiredScopes(scopes dtclient.TokenScopes, dk dynakube.DynaKube) error {
 	collectedErrors := make([]error, 0)
 
 	for _, feature := range token.Features {
 		if feature.IsEnabled(dk) {
-			isMissing, missingScopes := feature.IsScopeMissing(scopes)
-			if isMissing {
+			missingScopes := feature.CollectMissingRequiredScopes(scopes)
+			if len(missingScopes) > 0 {
 				collectedErrors = append(collectedErrors,
 					errors.Errorf("feature '%s' is missing scope '%s'",
 						feature.Name,
@@ -56,6 +77,18 @@ func (token *Token) verifyScopes(ctx context.Context, dtClient dtclient.Client, 
 	}
 
 	return nil
+}
+
+func (token *Token) collectOptionalScopes(availableScopes dtclient.TokenScopes, dk dynakube.DynaKube) map[string]bool {
+	optionalScopes := map[string]bool{}
+
+	for _, feature := range token.Features {
+		if feature.IsEnabled(dk) {
+			maps.Insert(optionalScopes, maps.All(feature.CollectOptionalScopes(availableScopes)))
+		}
+	}
+
+	return optionalScopes
 }
 
 func (token *Token) verifyValue() error {

@@ -3,8 +3,10 @@ package dynakube
 import (
 	dynakubelatest "github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube"
 	activegatelatest "github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/activegate"
+	extensionslatest "github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/extensions"
 	kspmlatest "github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/kspm"
 	logmonitoringlatest "github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/logmonitoring"
+	metadataenrichmentlatest "github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/metadataenrichment"
 	oneagentlatest "github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/oneagent"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/v1beta3/dynakube/kspm"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/v1beta3/dynakube/logmonitoring"
@@ -71,7 +73,9 @@ func (src *DynaKube) toKspmSpec(dst *dynakubelatest.DynaKube) {
 
 func (src *DynaKube) toExtensionsSpec(dst *dynakubelatest.DynaKube) {
 	if src.Spec.Extensions != nil {
-		dst.Spec.Extensions = &dynakubelatest.ExtensionsSpec{}
+		dst.Spec.Extensions = &extensionslatest.Spec{
+			PrometheusSpec: &extensionslatest.PrometheusSpec{},
+		}
 	}
 }
 
@@ -155,8 +159,8 @@ func toOpenTelemetryCollectorTemplate(src OpenTelemetryCollectorSpec) dynakubela
 	return dst
 }
 
-func toExtensionControllerTemplate(src ExtensionExecutionControllerSpec) dynakubelatest.ExtensionExecutionControllerSpec {
-	dst := dynakubelatest.ExtensionExecutionControllerSpec{}
+func toExtensionControllerTemplate(src ExtensionExecutionControllerSpec) extensionslatest.ExecutionControllerSpec {
+	dst := extensionslatest.ExecutionControllerSpec{}
 
 	dst.PersistentVolumeClaim = src.PersistentVolumeClaim
 	dst.Labels = src.Labels
@@ -203,11 +207,11 @@ func (src *DynaKube) toStatus(dst *dynakubelatest.DynaKube) {
 		VersionStatus: src.Status.CodeModules.VersionStatus,
 	}
 
-	dst.Status.MetadataEnrichment.Rules = make([]dynakubelatest.EnrichmentRule, 0)
+	dst.Status.MetadataEnrichment.Rules = make([]metadataenrichmentlatest.EnrichmentRule, 0)
 	for _, rule := range src.Status.MetadataEnrichment.Rules {
 		dst.Status.MetadataEnrichment.Rules = append(dst.Status.MetadataEnrichment.Rules,
-			dynakubelatest.EnrichmentRule{
-				Type:   dynakubelatest.EnrichmentRuleType(rule.Type),
+			metadataenrichmentlatest.EnrichmentRule{
+				Type:   metadataenrichmentlatest.EnrichmentRuleType(rule.Type),
 				Source: rule.Source,
 				Target: rule.Target,
 			})

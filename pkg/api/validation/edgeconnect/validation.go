@@ -2,6 +2,7 @@ package validation
 
 import (
 	"context"
+	"fmt"
 
 	v1alpha1 "github.com/Dynatrace/dynatrace-operator/pkg/api/v1alpha1/edgeconnect"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/v1alpha2/edgeconnect"
@@ -24,7 +25,8 @@ type validatorFunc func(ctx context.Context, dv *Validator, ec *edgeconnect.Edge
 
 var validatorErrorFuncs = []validatorFunc{
 	isModuleDisabled,
-	isInvalidAPIServer,
+	checkAPIServerProtocolNotSet,
+	isAllowedSuffixAPIServer,
 	nameTooLong,
 	checkHostPatternsValue,
 	isInvalidServiceName,
@@ -93,9 +95,12 @@ func getEdgeConnect(obj runtime.Object) (ec *edgeconnect.EdgeConnect, err error)
 		ec = v
 	case *v1alpha1.EdgeConnect:
 		err = v.ConvertTo(ec)
-		if err != nil {
-			return
+	default:
+		if gvk := obj.GetObjectKind().GroupVersionKind(); !gvk.Empty() {
+			return nil, fmt.Errorf("unknown object %s", gvk)
 		}
+
+		return nil, fmt.Errorf("unknown object %T", obj)
 	}
 
 	return

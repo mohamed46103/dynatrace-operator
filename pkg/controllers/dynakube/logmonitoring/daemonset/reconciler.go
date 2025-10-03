@@ -46,8 +46,8 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 		}
 
 		query := daemonset.Query(r.client, r.apiReader, log)
-		err := query.Delete(ctx, &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: r.dk.LogMonitoring().GetDaemonSetName(), Namespace: r.dk.Namespace}})
 
+		err := query.Delete(ctx, &appsv1.DaemonSet{ObjectMeta: metav1.ObjectMeta{Name: r.dk.LogMonitoring().GetDaemonSetName(), Namespace: r.dk.Namespace}})
 		if err != nil {
 			log.Error(err, "failed to clean-up LogMonitoring config-secret")
 		}
@@ -55,12 +55,6 @@ func (r *Reconciler) Reconcile(ctx context.Context) error {
 		meta.RemoveStatusCondition(r.dk.Conditions(), ConditionType)
 
 		return nil // clean-up shouldn't cause a failure
-	}
-
-	if !r.isMEConfigured() {
-		log.Info("Kubernetes settings are not yet available, which are needed for LogMonitoring, will requeue")
-
-		return KubernetesSettingsNotAvailableError
 	}
 
 	ds, err := r.generateDaemonSet()
@@ -123,6 +117,6 @@ func (r *Reconciler) generateDaemonSet() (*appsv1.DaemonSet, error) {
 	return ds, nil
 }
 
-func (r *Reconciler) isMEConfigured() bool {
-	return r.dk.Status.KubernetesClusterMEID != "" && r.dk.Status.KubernetesClusterName != ""
+func isMEConfigured(dk dynakube.DynaKube) bool {
+	return dk.Status.KubernetesClusterMEID != "" && dk.Status.KubernetesClusterName != ""
 }

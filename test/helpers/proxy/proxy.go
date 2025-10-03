@@ -6,17 +6,16 @@ import (
 	"context"
 	"crypto/x509"
 	"fmt"
-	"path"
 	"path/filepath"
 	"testing"
 
+	"github.com/Dynatrace/dynatrace-bootstrapper/pkg/configure/oneagent/pmc"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/shared/value"
-	"github.com/Dynatrace/dynatrace-operator/pkg/injection/codemodule/installer/common"
 	"github.com/Dynatrace/dynatrace-operator/pkg/util/certificates"
 	"github.com/Dynatrace/dynatrace-operator/pkg/util/timeprovider"
 	"github.com/Dynatrace/dynatrace-operator/pkg/webhook"
-	oamutation "github.com/Dynatrace/dynatrace-operator/pkg/webhook/mutation/pod/v1/oneagent"
+	"github.com/Dynatrace/dynatrace-operator/pkg/webhook/mutation/pod/volumes"
 	"github.com/Dynatrace/dynatrace-operator/test/helpers"
 	"github.com/Dynatrace/dynatrace-operator/test/helpers/curl"
 	"github.com/Dynatrace/dynatrace-operator/test/helpers/kubeobjects/deployment"
@@ -47,12 +46,12 @@ const (
 )
 
 var (
-	dynatraceNetworkPolicy = path.Join(project.TestDataDir(), "network/dynatrace-denial.yaml")
+	dynatraceNetworkPolicy = filepath.Join(project.TestDataDir(), "network/dynatrace-denial.yaml")
 
-	proxyDeploymentPath                      = path.Join(project.TestDataDir(), "network/proxy.yaml")
-	proxyWithCustomCADeploymentPath          = path.Join(project.TestDataDir(), "network/proxy-ssl.yaml")
-	proxyNamespaceWithCustomCADeploymentPath = path.Join(project.TestDataDir(), "network/proxy-ssl-namespace.yaml")
-	proxySCCPath                             = path.Join(project.TestDataDir(), "network/proxy-scc.yaml")
+	proxyDeploymentPath                      = filepath.Join(project.TestDataDir(), "network/proxy.yaml")
+	proxyWithCustomCADeploymentPath          = filepath.Join(project.TestDataDir(), "network/proxy-ssl.yaml")
+	proxyNamespaceWithCustomCADeploymentPath = filepath.Join(project.TestDataDir(), "network/proxy-ssl-namespace.yaml")
+	proxySCCPath                             = filepath.Join(project.TestDataDir(), "network/proxy-scc.yaml")
 
 	ProxySpec = &value.Source{
 		Value: "http://squid.proxy.svc.cluster.local:3128",
@@ -133,7 +132,7 @@ func CheckRuxitAgentProcFileHasProxySetting(sampleApp sample.App, proxySpec *val
 			Name:      sampleApp.Name(),
 			Namespace: sampleApp.Namespace(),
 		}).ForEachPod(func(podItem corev1.Pod) {
-			dir := filepath.Join(oamutation.OneAgentConfMountPath, common.RuxitConfFileName)
+			dir := filepath.Join(volumes.ConfigMountPath, pmc.DestinationRuxitAgentProcPath)
 			readFileCommand := shell.ReadFile(dir)
 			result, err := pod.Exec(ctx, resources, podItem, sampleApp.ContainerName(), readFileCommand...)
 			assert.Contains(t, result.StdOut.String(), fmt.Sprintf("proxy %s", proxySpec.Value))

@@ -17,6 +17,9 @@ kubectl get secret --namespace "$FLC_NAMESPACE" "$FLC_ENVIRONMENT_SECRET_NAME" -
 echo "Switching to test cluster for environment '$FLC_ENVIRONMENT'!"
 export KUBECONFIG="$FLC_ENVIRONMENT_KUBECONFIG"
 
+echo "Exporting env var containing helm chart used for installation (if provided)"
+export HELM_CHART
+
 echo "Preparing test tenant secrets..."
 mkdir -p test/testdata/secrets/
 
@@ -26,6 +29,7 @@ cat << EOF > single-tenant.yaml
 tenantUid: $TENANT1_NAME
 apiUrl: https://$TENANT1_NAME.dev.dynatracelabs.com/api
 apiToken: $TENANT1_APITOKEN
+apiTokenNoSettings: $TENANT1_APITOKEN_NOSETTINGS
 dataIngestToken: $TENANT1_DATAINGESTTOKEN
 EOF
 

@@ -9,6 +9,7 @@ import (
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/exp"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/activegate"
+	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/extensions"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/scheme/fake"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/shared/communication"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/shared/image"
@@ -48,9 +49,9 @@ func getTestDynakube() *dynakube.DynaKube {
 			Annotations: map[string]string{},
 		},
 		Spec: dynakube.DynaKubeSpec{
-			Extensions: &dynakube.ExtensionsSpec{},
+			Extensions: &extensions.Spec{PrometheusSpec: &extensions.PrometheusSpec{}},
 			Templates: dynakube.TemplatesSpec{
-				ExtensionExecutionController: dynakube.ExtensionExecutionControllerSpec{
+				ExtensionExecutionController: extensions.ExecutionControllerSpec{
 					ImageRef: image.Ref{
 						Repository: testEecImageRepository,
 						Tag:        testEecImageTag,
@@ -79,14 +80,14 @@ func getStatefulset(t *testing.T, dk *dynakube.DynaKube) *appsv1.StatefulSet {
 	require.NoError(t, err)
 
 	statefulSet := &appsv1.StatefulSet{}
-	err = mockK8sClient.Get(context.Background(), client.ObjectKey{Name: dk.ExtensionsExecutionControllerStatefulsetName(), Namespace: dk.Namespace}, statefulSet)
+	err = mockK8sClient.Get(context.Background(), client.ObjectKey{Name: dk.Extensions().GetExecutionControllerStatefulsetName(), Namespace: dk.Namespace}, statefulSet)
 	require.NoError(t, err)
 
 	return statefulSet
 }
 
 func mockTLSSecret(t *testing.T, client client.Client, dk *dynakube.DynaKube) client.Client {
-	tlsSecret := getTLSSecret(dk.ExtensionsTLSSecretName(), dk.Namespace, "super-cert", "super-key")
+	tlsSecret := getTLSSecret(dk.Extensions().GetTLSSecretName(), dk.Namespace, "super-cert", "super-key")
 
 	err := client.Create(context.Background(), &tlsSecret)
 	require.NoError(t, err)
@@ -122,7 +123,7 @@ func TestConditions(t *testing.T) {
 		require.Error(t, err)
 
 		statefulSet := &appsv1.StatefulSet{}
-		err = mockK8sClient.Get(context.Background(), client.ObjectKey{Name: dk.ExtensionsExecutionControllerStatefulsetName(), Namespace: dk.Namespace}, statefulSet)
+		err = mockK8sClient.Get(context.Background(), client.ObjectKey{Name: dk.Extensions().GetExecutionControllerStatefulsetName(), Namespace: dk.Namespace}, statefulSet)
 		require.Error(t, err)
 
 		assert.True(t, errors.IsNotFound(err))
@@ -138,7 +139,7 @@ func TestConditions(t *testing.T) {
 		require.Error(t, err)
 
 		statefulSet := &appsv1.StatefulSet{}
-		err = mockK8sClient.Get(context.Background(), client.ObjectKey{Name: dk.ExtensionsExecutionControllerStatefulsetName(), Namespace: dk.Namespace}, statefulSet)
+		err = mockK8sClient.Get(context.Background(), client.ObjectKey{Name: dk.Extensions().GetExecutionControllerStatefulsetName(), Namespace: dk.Namespace}, statefulSet)
 		require.Error(t, err)
 
 		assert.True(t, errors.IsNotFound(err))
@@ -147,7 +148,7 @@ func TestConditions(t *testing.T) {
 	t.Run("extensions are disabled", func(t *testing.T) {
 		dk := getTestDynakube()
 		dk.Spec.Extensions = nil
-		conditions.SetStatefulSetCreated(dk.Conditions(), extensionsControllerStatefulSetConditionType, dk.ExtensionsExecutionControllerStatefulsetName())
+		conditions.SetStatefulSetCreated(dk.Conditions(), extensionsControllerStatefulSetConditionType, dk.Extensions().GetExecutionControllerStatefulsetName())
 
 		mockK8sClient := fake.NewClient(dk)
 
@@ -155,7 +156,7 @@ func TestConditions(t *testing.T) {
 		require.NoError(t, err)
 
 		statefulSet := &appsv1.StatefulSet{}
-		err = mockK8sClient.Get(context.Background(), client.ObjectKey{Name: dk.ExtensionsExecutionControllerStatefulsetName(), Namespace: dk.Namespace}, statefulSet)
+		err = mockK8sClient.Get(context.Background(), client.ObjectKey{Name: dk.Extensions().GetExecutionControllerStatefulsetName(), Namespace: dk.Namespace}, statefulSet)
 		require.Error(t, err)
 
 		assert.True(t, errors.IsNotFound(err))
@@ -207,19 +208,19 @@ func TestSecretHashAnnotation(t *testing.T) {
 		err := reconciler.Reconcile(context.Background())
 		require.NoError(t, err)
 
-		err = mockK8sClient.Get(context.Background(), client.ObjectKey{Name: dk.ExtensionsExecutionControllerStatefulsetName(), Namespace: dk.Namespace}, statefulSet)
+		err = mockK8sClient.Get(context.Background(), client.ObjectKey{Name: dk.Extensions().GetExecutionControllerStatefulsetName(), Namespace: dk.Namespace}, statefulSet)
 		require.NoError(t, err)
 
 		originalSecretHash := statefulSet.Spec.Template.Annotations[api.AnnotationExtensionsSecretHash]
 
 		// then update the TLS Secret and call reconcile again
-		updatedTLSSecret := getTLSSecret(dk.ExtensionsTLSSecretName(), dk.Namespace, "updated-cert", "updated-key")
+		updatedTLSSecret := getTLSSecret(dk.Extensions().GetTLSSecretName(), dk.Namespace, "updated-cert", "updated-key")
 		err = mockK8sClient.Update(context.Background(), &updatedTLSSecret)
 		require.NoError(t, err)
 
 		err = reconciler.Reconcile(context.Background())
 		require.NoError(t, err)
-		err = mockK8sClient.Get(context.Background(), client.ObjectKey{Name: dk.ExtensionsExecutionControllerStatefulsetName(), Namespace: dk.Namespace}, statefulSet)
+		err = mockK8sClient.Get(context.Background(), client.ObjectKey{Name: dk.Extensions().GetExecutionControllerStatefulsetName(), Namespace: dk.Namespace}, statefulSet)
 		require.NoError(t, err)
 
 		resultingSecretHash := statefulSet.Spec.Template.Annotations[api.AnnotationExtensionsSecretHash]
@@ -268,14 +269,14 @@ func TestEnvironmentVariables(t *testing.T) {
 		statefulSet := getStatefulset(t, dk)
 
 		assert.Equal(t, corev1.EnvVar{Name: envTenantID, Value: dk.Status.ActiveGate.ConnectionInfo.TenantUUID}, statefulSet.Spec.Template.Spec.Containers[0].Env[0])
-		assert.Equal(t, corev1.EnvVar{Name: envServerURL, Value: buildActiveGateServiceName(dk) + "." + dk.Namespace + ".svc.cluster.local:443"}, statefulSet.Spec.Template.Spec.Containers[0].Env[1])
+		assert.Equal(t, corev1.EnvVar{Name: envServerURL, Value: buildActiveGateServiceName(dk) + "." + dk.Namespace + ":443"}, statefulSet.Spec.Template.Spec.Containers[0].Env[1])
 		assert.Equal(t, corev1.EnvVar{Name: envEecTokenPath, Value: eecTokenMountPath + "/" + eecConsts.TokenSecretKey}, statefulSet.Spec.Template.Spec.Containers[0].Env[2])
 		assert.Equal(t, corev1.EnvVar{Name: envEecIngestPort, Value: strconv.Itoa(int(collectorPort))}, statefulSet.Spec.Template.Spec.Containers[0].Env[3])
 		assert.Equal(t, corev1.EnvVar{Name: envExtensionsModuleExecPathName, Value: envExtensionsModuleExecPath}, statefulSet.Spec.Template.Spec.Containers[0].Env[4])
 		assert.Equal(t, corev1.EnvVar{Name: envDsInstallDirName, Value: envDsInstallDir}, statefulSet.Spec.Template.Spec.Containers[0].Env[5])
 		assert.Equal(t, corev1.EnvVar{Name: envK8sClusterID, Value: dk.Status.KubeSystemUUID}, statefulSet.Spec.Template.Spec.Containers[0].Env[6])
 		assert.Equal(t, corev1.EnvVar{Name: envK8sExtServiceURL, Value: "https://" + dk.Name + eecConsts.ExtensionsControllerSuffix + "." + dk.Namespace}, statefulSet.Spec.Template.Spec.Containers[0].Env[7])
-		assert.Equal(t, corev1.EnvVar{Name: envDSTokenPath, Value: eecTokenMountPath + "/" + consts.OtelcTokenSecretKey}, statefulSet.Spec.Template.Spec.Containers[0].Env[8])
+		assert.Equal(t, corev1.EnvVar{Name: envDSTokenPath, Value: eecTokenMountPath + "/" + consts.DatasourceTokenSecretKey}, statefulSet.Spec.Template.Spec.Containers[0].Env[8])
 		assert.Equal(t, corev1.EnvVar{Name: envHTTPSCertPathPem, Value: envEecHTTPSCertPathPem}, statefulSet.Spec.Template.Spec.Containers[0].Env[9])
 		assert.Equal(t, corev1.EnvVar{Name: envHTTPSPrivKeyPathPem, Value: envEecHTTPSPrivKeyPathPem}, statefulSet.Spec.Template.Spec.Containers[0].Env[10])
 		assert.NotContains(t, statefulSet.Spec.Template.Spec.Containers[0].Env, corev1.EnvVar{Name: envRuntimeConfigMountPath, Value: customConfigMountPath + "/" + runtimeConfigurationFilename})
@@ -862,7 +863,7 @@ func TestVolumes(t *testing.T) {
 				Name: consts.ExtensionsTokensVolumeName,
 				VolumeSource: corev1.VolumeSource{
 					Secret: &corev1.SecretVolumeSource{
-						SecretName:  dk.ExtensionsTokenSecretName(),
+						SecretName:  dk.Extensions().GetTokenSecretName(),
 						DefaultMode: &mode,
 					},
 				},
@@ -883,7 +884,7 @@ func TestVolumes(t *testing.T) {
 				Name: httpsCertVolumeName,
 				VolumeSource: corev1.VolumeSource{
 					Secret: &corev1.SecretVolumeSource{
-						SecretName: dk.ExtensionsTLSSecretName(),
+						SecretName: dk.Extensions().GetTLSSecretName(),
 					},
 				},
 			},
@@ -910,7 +911,7 @@ func TestVolumes(t *testing.T) {
 				Name: consts.ExtensionsTokensVolumeName,
 				VolumeSource: corev1.VolumeSource{
 					Secret: &corev1.SecretVolumeSource{
-						SecretName:  dk.ExtensionsTokenSecretName(),
+						SecretName:  dk.Extensions().GetTokenSecretName(),
 						DefaultMode: &mode,
 					},
 				},
@@ -931,7 +932,7 @@ func TestVolumes(t *testing.T) {
 				Name: httpsCertVolumeName,
 				VolumeSource: corev1.VolumeSource{
 					Secret: &corev1.SecretVolumeSource{
-						SecretName: dk.ExtensionsTLSSecretName(),
+						SecretName: dk.Extensions().GetTLSSecretName(),
 					},
 				},
 			},
@@ -980,7 +981,7 @@ func TestVolumes(t *testing.T) {
 				Name: consts.ExtensionsTokensVolumeName,
 				VolumeSource: corev1.VolumeSource{
 					Secret: &corev1.SecretVolumeSource{
-						SecretName:  dk.ExtensionsTokenSecretName(),
+						SecretName:  dk.Extensions().GetTokenSecretName(),
 						DefaultMode: &mode,
 					},
 				},
@@ -1001,7 +1002,7 @@ func TestVolumes(t *testing.T) {
 				Name: httpsCertVolumeName,
 				VolumeSource: corev1.VolumeSource{
 					Secret: &corev1.SecretVolumeSource{
-						SecretName: dk.ExtensionsTLSSecretName(),
+						SecretName: dk.Extensions().GetTLSSecretName(),
 					},
 				},
 			},
@@ -1028,7 +1029,7 @@ func TestVolumes(t *testing.T) {
 				Name: consts.ExtensionsTokensVolumeName,
 				VolumeSource: corev1.VolumeSource{
 					Secret: &corev1.SecretVolumeSource{
-						SecretName:  dk.ExtensionsTokenSecretName(),
+						SecretName:  dk.Extensions().GetTokenSecretName(),
 						DefaultMode: &mode,
 					},
 				},
@@ -1049,7 +1050,7 @@ func TestVolumes(t *testing.T) {
 				Name: httpsCertVolumeName,
 				VolumeSource: corev1.VolumeSource{
 					Secret: &corev1.SecretVolumeSource{
-						SecretName: dk.ExtensionsTLSSecretName(),
+						SecretName: dk.Extensions().GetTLSSecretName(),
 					},
 				},
 			},
@@ -1087,7 +1088,7 @@ func TestVolumes(t *testing.T) {
 				Name: consts.ExtensionsTokensVolumeName,
 				VolumeSource: corev1.VolumeSource{
 					Secret: &corev1.SecretVolumeSource{
-						SecretName:  dk.ExtensionsTokenSecretName(),
+						SecretName:  dk.Extensions().GetTokenSecretName(),
 						DefaultMode: &mode,
 					},
 				},
@@ -1108,7 +1109,7 @@ func TestVolumes(t *testing.T) {
 				Name: httpsCertVolumeName,
 				VolumeSource: corev1.VolumeSource{
 					Secret: &corev1.SecretVolumeSource{
-						SecretName: dk.ExtensionsTLSSecretName(),
+						SecretName: dk.Extensions().GetTLSSecretName(),
 					},
 				},
 			},
@@ -1146,7 +1147,7 @@ func TestVolumes(t *testing.T) {
 				Name: consts.ExtensionsTokensVolumeName,
 				VolumeSource: corev1.VolumeSource{
 					Secret: &corev1.SecretVolumeSource{
-						SecretName:  dk.ExtensionsTokenSecretName(),
+						SecretName:  dk.Extensions().GetTokenSecretName(),
 						DefaultMode: &mode,
 					},
 				},
@@ -1167,7 +1168,7 @@ func TestVolumes(t *testing.T) {
 				Name: httpsCertVolumeName,
 				VolumeSource: corev1.VolumeSource{
 					Secret: &corev1.SecretVolumeSource{
-						SecretName: dk.ExtensionsTLSSecretName(),
+						SecretName: dk.Extensions().GetTLSSecretName(),
 					},
 				},
 			},

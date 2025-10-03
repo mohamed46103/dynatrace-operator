@@ -3,6 +3,8 @@ package token
 import (
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube"
 	dtclient "github.com/Dynatrace/dynatrace-operator/pkg/clients/dynatrace"
+	"github.com/Dynatrace/dynatrace-operator/pkg/consts"
+	"github.com/Dynatrace/dynatrace-operator/pkg/util/envvars"
 	"golang.org/x/exp/slices"
 )
 
@@ -10,31 +12,70 @@ type Feature struct {
 	IsEnabled      func(dk dynakube.DynaKube) bool
 	Name           string
 	RequiredScopes []string
+	OptionalScopes []string
 }
 
-func (feature *Feature) IsScopeMissing(scopes []string) (bool, []string) {
+func (feature *Feature) CollectMissingRequiredScopes(availableScopes []string) []string {
 	missingScopes := make([]string, 0)
 
 	for _, requiredScope := range feature.RequiredScopes {
-		if !slices.Contains(scopes, requiredScope) {
+		if !slices.Contains(availableScopes, requiredScope) {
 			missingScopes = append(missingScopes, requiredScope)
 		}
 	}
 
-	return len(missingScopes) > 0, missingScopes
+	return missingScopes
+}
+
+func (feature *Feature) CollectOptionalScopes(availableScopes []string) map[string]bool {
+	optionalScopes := map[string]bool{}
+
+	for _, scope := range feature.OptionalScopes {
+		if !slices.Contains(availableScopes, scope) {
+			optionalScopes[scope] = false
+		} else {
+			optionalScopes[scope] = true
+		}
+	}
+
+	return optionalScopes
 }
 
 func getFeaturesForAPIToken(paasTokenExists bool) []Feature {
 	return []Feature{
 		{
+			Name:           "Access problem and event feed, metrics, and topology",
+			RequiredScopes: []string{dtclient.TokenScopeDataExport},
+			IsEnabled: func(dk dynakube.DynaKube) bool {
+				return envvars.GetBool(consts.HostAvailabilityDetectionEnvVar, true)
+			},
+		},
+		{
 			Name: "Kubernetes API Monitoring",
-			RequiredScopes: []string{
-				dtclient.TokenScopeEntitiesRead,
+			OptionalScopes: []string{
 				dtclient.TokenScopeSettingsRead,
 				dtclient.TokenScopeSettingsWrite},
 			IsEnabled: func(dk dynakube.DynaKube) bool {
 				return dk.ActiveGate().IsKubernetesMonitoringEnabled() &&
 					dk.FF().IsAutomaticK8sAPIMonitoring()
+			},
+		},
+		{
+			Name: "LogMonitoring",
+			OptionalScopes: []string{
+				dtclient.TokenScopeSettingsRead,
+				dtclient.TokenScopeSettingsWrite},
+			IsEnabled: func(dk dynakube.DynaKube) bool {
+				return dk.LogMonitoring().IsEnabled()
+			},
+		},
+		{
+			Name: "CodeModule Injection",
+			OptionalScopes: []string{
+				dtclient.TokenScopeSettingsRead,
+			},
+			IsEnabled: func(dk dynakube.DynaKube) bool {
+				return dk.OneAgent().IsAppInjectionNeeded() // also covers node-image pull
 			},
 		},
 		{
@@ -49,6 +90,13 @@ func getFeaturesForAPIToken(paasTokenExists bool) []Feature {
 			RequiredScopes: []string{dtclient.TokenScopeInstallerDownload},
 			IsEnabled: func(_ dynakube.DynaKube) bool {
 				return !paasTokenExists
+			},
+		},
+		{
+			Name:           "MetadataEnrichment Rules",
+			OptionalScopes: []string{dtclient.TokenScopeSettingsRead},
+			IsEnabled: func(dk dynakube.DynaKube) bool {
+				return dk.MetadataEnrichment().IsEnabled()
 			},
 		},
 	}
@@ -73,6 +121,27 @@ func getFeaturesForDataIngest() []Feature {
 			RequiredScopes: []string{dtclient.TokenScopeMetricsIngest},
 			IsEnabled: func(dk dynakube.DynaKube) bool {
 				return dk.ActiveGate().IsMetricsIngestEnabled()
+			},
+		},
+		{
+			Name:           "OTLP trace exporter configuration",
+			RequiredScopes: []string{dtclient.TokenScopeOpenTelemetryTraceIngest},
+			IsEnabled: func(dk dynakube.DynaKube) bool {
+				return dk.Spec.OTLPExporterConfiguration != nil && dk.Spec.OTLPExporterConfiguration.IsTracesEnabled()
+			},
+		},
+		{
+			Name:           "OTLP logs exporter configuration",
+			RequiredScopes: []string{dtclient.TokenScopeLogsIngest},
+			IsEnabled: func(dk dynakube.DynaKube) bool {
+				return dk.Spec.OTLPExporterConfiguration != nil && dk.Spec.OTLPExporterConfiguration.IsLogsEnabled()
+			},
+		},
+		{
+			Name:           "OTLP metrics exporter configuration",
+			RequiredScopes: []string{dtclient.TokenScopeMetricsIngest},
+			IsEnabled: func(dk dynakube.DynaKube) bool {
+				return dk.Spec.OTLPExporterConfiguration != nil && dk.Spec.OTLPExporterConfiguration.IsMetricsEnabled()
 			},
 		},
 	}

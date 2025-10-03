@@ -5,28 +5,27 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/Dynatrace/dynatrace-operator/pkg/api/exp"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube/oneagent"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/scheme"
 	"github.com/Dynatrace/dynatrace-operator/pkg/api/scheme/fake"
-	"github.com/Dynatrace/dynatrace-operator/pkg/util/installconfig"
 	dtwebhook "github.com/Dynatrace/dynatrace-operator/pkg/webhook"
-	"github.com/Dynatrace/dynatrace-operator/pkg/webhook/mutation/pod/common/events"
-	webhookmock "github.com/Dynatrace/dynatrace-operator/test/mocks/pkg/webhook"
+	"github.com/Dynatrace/dynatrace-operator/pkg/webhook/mutation/pod/events"
+	"github.com/Dynatrace/dynatrace-operator/pkg/webhook/mutation/pod/handler"
+	podwebhook "github.com/Dynatrace/dynatrace-operator/pkg/webhook/mutation/pod/mutator"
+	handlermock "github.com/Dynatrace/dynatrace-operator/test/mocks/pkg/webhook/mutation/pod/handler"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/tools/record"
-	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 )
 
 const (
-	testImage         = "test-image"
+	testWebhookImage  = "test-wh-image"
 	testNamespaceName = "test-namespace"
 	testClusterID     = "test-cluster-id"
 	testPodName       = "test-pod"
@@ -37,11 +36,7 @@ func TestHandle(t *testing.T) {
 	ctx := context.Background()
 
 	t.Run("can't get NS ==> no inject, err in message", func(t *testing.T) {
-		wh := createTestWebhook(
-			webhookmock.NewPodInjector(t),
-			webhookmock.NewPodInjector(t),
-			[]client.Object{},
-		)
+		wh := createTestWebhook(t, handlermock.NewHandler(t), handlermock.NewHandler(t))
 
 		request := createTestAdmissionRequest(getTestPodWithInjectionDisabled())
 
@@ -53,11 +48,7 @@ func TestHandle(t *testing.T) {
 	})
 
 	t.Run("can't get DK ==> no inject, err in message", func(t *testing.T) {
-		wh := createTestWebhook(
-			webhookmock.NewPodInjector(t),
-			webhookmock.NewPodInjector(t),
-			[]client.Object{getTestNamespace()},
-		)
+		wh := createTestWebhook(t, handlermock.NewHandler(t), handlermock.NewHandler(t), getTestNamespace())
 
 		request := createTestAdmissionRequest(getTestPodWithInjectionDisabled())
 
@@ -71,11 +62,7 @@ func TestHandle(t *testing.T) {
 	t.Run("DK name missing from NS but OLM ==> no inject, no err in message", func(t *testing.T) {
 		ns := getTestNamespace()
 		ns.Labels = map[string]string{}
-		wh := createTestWebhook(
-			webhookmock.NewPodInjector(t),
-			webhookmock.NewPodInjector(t),
-			[]client.Object{ns},
-		)
+		wh := createTestWebhook(t, handlermock.NewHandler(t), handlermock.NewHandler(t), ns)
 		wh.deployedViaOLM = true
 
 		request := createTestAdmissionRequest(getTestPodWithInjectionDisabled())
@@ -90,11 +77,7 @@ func TestHandle(t *testing.T) {
 	t.Run("DK name missing from NS ==> no inject, err in message", func(t *testing.T) {
 		ns := getTestNamespace()
 		ns.Labels = map[string]string{}
-		wh := createTestWebhook(
-			webhookmock.NewPodInjector(t),
-			webhookmock.NewPodInjector(t),
-			[]client.Object{ns},
-		)
+		wh := createTestWebhook(t, handlermock.NewHandler(t), handlermock.NewHandler(t), ns)
 
 		request := createTestAdmissionRequest(getTestPodWithInjectionDisabled())
 
@@ -106,13 +89,11 @@ func TestHandle(t *testing.T) {
 	})
 
 	t.Run("no inject annotation ==> no inject, empty patch", func(t *testing.T) {
-		wh := createTestWebhook(
-			webhookmock.NewPodInjector(t),
-			webhookmock.NewPodInjector(t),
-			[]client.Object{
-				getTestNamespace(),
-				getTestDynakube(),
-			},
+		wh := createTestWebhook(t,
+			handlermock.NewHandler(t),
+			handlermock.NewHandler(t),
+			getTestNamespace(),
+			getTestDynakube(),
 		)
 
 		request := createTestAdmissionRequest(getTestPodWithInjectionDisabled())
@@ -124,13 +105,11 @@ func TestHandle(t *testing.T) {
 	})
 
 	t.Run("no inject annotation (per container) ==> no inject, empty patch", func(t *testing.T) {
-		wh := createTestWebhook(
-			webhookmock.NewPodInjector(t),
-			webhookmock.NewPodInjector(t),
-			[]client.Object{
-				getTestNamespace(),
-				getTestDynakube(),
-			},
+		wh := createTestWebhook(t,
+			handlermock.NewHandler(t),
+			handlermock.NewHandler(t),
+			getTestNamespace(),
+			getTestDynakube(),
 		)
 
 		request := createTestAdmissionRequest(getTestPodWithInjectionDisabledOnContainer())
@@ -142,13 +121,11 @@ func TestHandle(t *testing.T) {
 	})
 
 	t.Run("OC debug pod ==> no inject", func(t *testing.T) {
-		wh := createTestWebhook(
-			webhookmock.NewPodInjector(t),
-			webhookmock.NewPodInjector(t),
-			[]client.Object{
-				getTestNamespace(),
-				getTestDynakube(),
-			},
+		wh := createTestWebhook(t,
+			handlermock.NewHandler(t),
+			handlermock.NewHandler(t),
+			getTestNamespace(),
+			getTestDynakube(),
 		)
 
 		request := createTestAdmissionRequest(getTestPodWithOcDebugPodAnnotations())
@@ -158,162 +135,63 @@ func TestHandle(t *testing.T) {
 		assert.True(t, resp.Allowed)
 		assert.Equal(t, admission.Patched(""), resp)
 	})
+	t.Run("Arbitrary Error in OTLP handler ==> revert all modifications and include message", func(t *testing.T) {
+		injectionHandler := handlermock.NewHandler(t)
+		injectionHandler.On("Handle", mock.Anything).Return(nil)
 
-	t.Run("no FF appmon-dk ==> v1 injector", func(t *testing.T) {
-		v1Injector := webhookmock.NewPodInjector(t)
-		v1Injector.On("Handle", mock.Anything, mock.Anything).Return(nil)
-		wh := createTestWebhook(
-			v1Injector,
-			webhookmock.NewPodInjector(t),
-			[]client.Object{
-				getTestNamespace(),
-				getTestDynakubeDefaultAppMon(),
-			},
+		otlpHandler := handlermock.NewHandler(t)
+		otlpHandler.On("Handle", mock.Anything).Return(errors.New("err"))
+
+		wh := createTestWebhook(t,
+			injectionHandler,
+			otlpHandler,
+			getTestNamespace(),
+			getTestDynakube(),
 		)
-
-		installconfig.SetModulesOverride(t, installconfig.Modules{CSIDriver: false})
-
-		request := createTestAdmissionRequest(getTestPod())
-
-		resp := wh.Handle(ctx, *request)
-		require.NotNil(t, resp)
-		assert.NotEqual(t, admission.Patched(""), resp)
-	})
-
-	t.Run("FF appmon-dk WITHOUT CSI ==> v2 injector", func(t *testing.T) {
-		dk := getTestDynakubeDefaultAppMon()
-		dk.Annotations = map[string]string{
-			exp.OANodeImagePullKey: "true",
-		}
-
-		v2Injector := webhookmock.NewPodInjector(t)
-		v2Injector.On("Handle", mock.Anything, mock.Anything).Return(nil)
-		wh := createTestWebhook(
-			webhookmock.NewPodInjector(t),
-			v2Injector,
-			[]client.Object{
-				getTestNamespace(),
-				dk,
-			},
-		)
-
-		installconfig.SetModulesOverride(t, installconfig.Modules{CSIDriver: false})
-
-		request := createTestAdmissionRequest(getTestPod())
-
-		resp := wh.Handle(ctx, *request)
-		require.NotNil(t, resp)
-		assert.NotEqual(t, admission.Patched(""), resp)
-	})
-
-	t.Run("FF metadata-dk WITHOUT CSI ==> v1 injector", func(t *testing.T) {
-		dk := getTestMetadataDynakube()
-		dk.Annotations = map[string]string{
-			exp.OANodeImagePullKey: "true",
-		}
-
-		v1Injector := webhookmock.NewPodInjector(t)
-		v1Injector.On("Handle", mock.Anything, mock.Anything).Return(nil)
-		wh := createTestWebhook(
-			v1Injector,
-			webhookmock.NewPodInjector(t),
-			[]client.Object{
-				getTestNamespace(),
-				dk,
-			},
-		)
-
-		installconfig.SetModulesOverride(t, installconfig.Modules{CSIDriver: false})
-
-		request := createTestAdmissionRequest(getTestPod())
-
-		resp := wh.Handle(ctx, *request)
-		require.NotNil(t, resp)
-		assert.NotEqual(t, admission.Patched(""), resp)
-	})
-
-	t.Run("FF appmon-dk WITH CSI ==> v1 injector", func(t *testing.T) {
-		dk := getTestDynakubeDefaultAppMon()
-		dk.Annotations = map[string]string{
-			exp.OANodeImagePullKey: "true",
-		}
-
-		v1Injector := webhookmock.NewPodInjector(t)
-		v1Injector.On("Handle", mock.Anything, mock.Anything).Return(nil)
-		wh := createTestWebhook(
-			v1Injector,
-			webhookmock.NewPodInjector(t),
-			[]client.Object{
-				getTestNamespace(),
-				dk,
-			},
-		)
-
-		installconfig.SetModulesOverride(t, installconfig.Modules{CSIDriver: true})
-
-		request := createTestAdmissionRequest(getTestPod())
-
-		resp := wh.Handle(ctx, *request)
-		require.NotNil(t, resp)
-		assert.NotEqual(t, admission.Patched(""), resp)
-	})
-
-	t.Run("v1 injector error => silent error", func(t *testing.T) {
-		v1Injector := webhookmock.NewPodInjector(t)
-		v1Injector.On("Handle", mock.Anything, mock.Anything).Return(errors.New("BOOM"))
-		wh := createTestWebhook(
-			v1Injector,
-			webhookmock.NewPodInjector(t),
-			[]client.Object{
-				getTestNamespace(),
-				getTestDynakubeDefaultAppMon(),
-			},
-		)
-
-		installconfig.SetModulesOverride(t, installconfig.Modules{CSIDriver: false})
 
 		request := createTestAdmissionRequest(getTestPod())
 
 		resp := wh.Handle(ctx, *request)
 		require.NotNil(t, resp)
 		assert.True(t, resp.Allowed)
-		assert.NotEmpty(t, resp.Result.Message)
-		assert.Contains(t, resp.Result.Message, "BOOM")
+		assert.Equal(t, admission.Patched("Failed to inject into pod: test-pod because err"), resp)
 	})
+	t.Run("MutatorError in OTLP handler ==> revert all modifications", func(t *testing.T) {
+		injectionHandler := handlermock.NewHandler(t)
+		injectionHandler.On("Handle", mock.Anything).Return(nil)
 
-	t.Run("v2 injector error => silent error", func(t *testing.T) {
-		dk := getTestDynakubeDefaultAppMon()
-		dk.Annotations = map[string]string{
-			exp.OANodeImagePullKey: "true",
-		}
+		otlpHandler := handlermock.NewHandler(t)
 
-		v2Injector := webhookmock.NewPodInjector(t)
-		v2Injector.On("Handle", mock.Anything, mock.Anything).Return(errors.New("BOOM"))
-		wh := createTestWebhook(
-			webhookmock.NewPodInjector(t),
-			v2Injector,
-			[]client.Object{
-				getTestNamespace(),
-				dk,
+		annotated := false
+		otlpHandler.On("Handle", mock.Anything).Return(podwebhook.MutatorError{
+			Err: errors.New("err"),
+			Annotate: func(_ *corev1.Pod) {
+				annotated = true
 			},
+		})
+		wh := createTestWebhook(t,
+			injectionHandler,
+			otlpHandler,
+			getTestNamespace(),
+			getTestDynakube(),
 		)
-
-		installconfig.SetModulesOverride(t, installconfig.Modules{CSIDriver: false})
 
 		request := createTestAdmissionRequest(getTestPod())
 
 		resp := wh.Handle(ctx, *request)
 		require.NotNil(t, resp)
 		assert.True(t, resp.Allowed)
-		assert.NotEmpty(t, resp.Result.Message)
-		assert.Contains(t, resp.Result.Message, "BOOM")
+		// make sure no changes have been made to the pod due to the error returned by the handler
+		assert.Empty(t, resp.Patches)
+
+		assert.True(t, annotated)
 	})
 }
 
 func getTestPodWithInjectionDisabled() *corev1.Pod {
 	pod := getTestPod()
 	pod.Annotations = map[string]string{
-		dtwebhook.AnnotationDynatraceInject: "false",
+		podwebhook.AnnotationDynatraceInject: "false",
 	}
 
 	return pod
@@ -334,23 +212,47 @@ func getTestPodWithInjectionDisabledOnContainer() *corev1.Pod {
 	pod.Annotations = map[string]string{}
 
 	for _, c := range pod.Spec.Containers {
-		pod.Annotations[dtwebhook.AnnotationContainerInjection+"/"+c.Name] = "false"
+		pod.Annotations[podwebhook.AnnotationContainerInjection+"/"+c.Name] = "false"
 	}
 
 	return pod
 }
 
-func createTestWebhook(v1, v2 dtwebhook.PodInjector, objects []client.Object) *webhook {
+func getTestWebhookPod(t *testing.T) corev1.Pod {
+	t.Helper()
+
+	return corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "test-webhook",
+			Namespace: "test-namespace",
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{
+				{
+					Name:  dtwebhook.WebhookContainerName,
+					Image: testWebhookImage,
+				},
+			},
+		},
+	}
+}
+
+func createTestWebhook(t *testing.T, injectionHandler, otlpHandler handler.Handler, objects ...client.Object) *webhook {
+	t.Helper()
+
 	decoder := admission.NewDecoder(scheme.Scheme)
 
-	return &webhook{
-		v1:               v1,
-		v2:               v2,
-		apiReader:        fake.NewClient(objects...),
-		decoder:          decoder,
-		webhookNamespace: testNamespaceName,
-		recorder:         events.NewRecorder(record.NewFakeRecorder(10)),
-	}
+	fakeClient := fake.NewClient(objects...)
+
+	wh, err := newWebhook(fakeClient, fakeClient, fakeClient,
+		events.NewRecorder(record.NewFakeRecorder(10)), decoder, getTestWebhookPod(t), false)
+
+	require.NoError(t, err)
+
+	wh.injectionHandler = injectionHandler
+	wh.otlpHandler = otlpHandler
+
+	return wh
 }
 
 func getTestDynakube() *dynakube.DynaKube {
@@ -358,28 +260,6 @@ func getTestDynakube() *dynakube.DynaKube {
 		ObjectMeta: getTestDynakubeMeta(),
 		Spec: dynakube.DynaKubeSpec{
 			OneAgent: getCloudNativeSpec(),
-		},
-	}
-}
-
-func getTestDynakubeDefaultAppMon() *dynakube.DynaKube {
-	return &dynakube.DynaKube{
-		ObjectMeta: getTestDynakubeMeta(),
-		Spec: dynakube.DynaKubeSpec{
-			OneAgent: oneagent.Spec{
-				ApplicationMonitoring: &oneagent.ApplicationMonitoringSpec{},
-			},
-		},
-	}
-}
-
-func getTestMetadataDynakube() *dynakube.DynaKube {
-	return &dynakube.DynaKube{
-		ObjectMeta: getTestDynakubeMeta(),
-		Spec: dynakube.DynaKubeSpec{
-			MetadataEnrichment: dynakube.MetadataEnrichment{
-				Enabled: ptr.To(true),
-			},
 		},
 	}
 }

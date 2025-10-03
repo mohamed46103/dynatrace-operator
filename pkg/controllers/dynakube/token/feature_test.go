@@ -3,47 +3,94 @@ package token
 import (
 	"testing"
 
-	"github.com/Dynatrace/dynatrace-operator/pkg/api/latest/dynakube"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestFeature_IsScopeMissing(t *testing.T) {
-	t.Run("no scope missing", func(t *testing.T) {
-		feature := Feature{
-			Name:           "Access problem and event feed, metrics, and topology",
-			RequiredScopes: []string{"scope1", "scope2"},
-			IsEnabled: func(dk dynakube.DynaKube) bool {
-				return true
-			},
-		}
-		missing, scopes := feature.IsScopeMissing([]string{"scope1", "scope2"})
-		assert.False(t, missing)
-		assert.Empty(t, scopes)
-	})
+func TestFeature_CollectMissingRequiredScopes(t *testing.T) {
+	type testCase struct {
+		title           string
+		requiredScopes  []string
+		availableScopes []string
+		expectedMissing []string
+	}
 
-	t.Run("one scope missing", func(t *testing.T) {
-		feature := Feature{
-			Name:           "Access problem and event feed, metrics, and topology",
-			RequiredScopes: []string{"scope1", "scope2"},
-			IsEnabled: func(dk dynakube.DynaKube) bool {
-				return true
-			},
-		}
-		missing, scopes := feature.IsScopeMissing([]string{"scope1"})
-		assert.True(t, missing)
-		assert.Equal(t, []string{"scope2"}, scopes)
-	})
+	cases := []testCase{
+		{
+			title:           "no scope missing",
+			requiredScopes:  []string{"scope1", "scope2"},
+			availableScopes: []string{"scope1", "scope2"},
+			expectedMissing: []string{},
+		},
+		{
+			title:           "one scope missing",
+			requiredScopes:  []string{"scope1", "scope2"},
+			availableScopes: []string{"scope2"},
+			expectedMissing: []string{"scope1"},
+		},
+		{
+			title:           "all scopes missing",
+			requiredScopes:  []string{"scope1", "scope2"},
+			availableScopes: []string{},
+			expectedMissing: []string{"scope1", "scope2"},
+		},
+	}
 
-	t.Run("all scopes missing", func(t *testing.T) {
-		feature := Feature{
-			Name:           "Access problem and event feed, metrics, and topology",
-			RequiredScopes: []string{"scope1", "scope2"},
-			IsEnabled: func(dk dynakube.DynaKube) bool {
-				return true
+	for _, c := range cases {
+		t.Run(c.title, func(t *testing.T) {
+			feature := Feature{
+				RequiredScopes: c.requiredScopes,
+			}
+			missingScopes := feature.CollectMissingRequiredScopes(c.availableScopes)
+			assert.Equal(t, c.expectedMissing, missingScopes)
+		})
+	}
+}
+
+func TestFeature_CollectOptionalScopes(t *testing.T) {
+	type testCase struct {
+		title           string
+		optionalScopes  []string
+		availableScopes []string
+		expectedOut     map[string]bool
+	}
+
+	cases := []testCase{
+		{
+			title:           "no scope missing",
+			optionalScopes:  []string{"scope1", "scope2"},
+			availableScopes: []string{"scope1", "scope2"},
+			expectedOut: map[string]bool{
+				"scope1": true,
+				"scope2": true,
 			},
-		}
-		missing, scopes := feature.IsScopeMissing([]string{})
-		assert.True(t, missing)
-		assert.Equal(t, []string{"scope1", "scope2"}, scopes)
-	})
+		},
+		{
+			title:           "one scope missing",
+			optionalScopes:  []string{"scope1", "scope2"},
+			availableScopes: []string{"scope2"},
+			expectedOut: map[string]bool{
+				"scope1": false,
+				"scope2": true,
+			},
+		},
+		{
+			title:           "all scopes missing",
+			optionalScopes:  []string{"scope1", "scope2"},
+			availableScopes: []string{},
+			expectedOut: map[string]bool{
+				"scope1": false,
+				"scope2": false,
+			},
+		},
+	}
+
+	for _, c := range cases {
+		t.Run(c.title, func(t *testing.T) {
+			feature := Feature{
+				OptionalScopes: c.optionalScopes,
+			}
+			optionalScopes := feature.CollectOptionalScopes(c.availableScopes)
+			assert.Equal(t, c.expectedOut, optionalScopes)
+		})
+	}
 }

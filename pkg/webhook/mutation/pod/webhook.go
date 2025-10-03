@@ -3,19 +3,25 @@ package pod
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 
+	"github.com/Dynatrace/dynatrace-operator/pkg/logd"
 	"github.com/Dynatrace/dynatrace-operator/pkg/util/kubeobjects/env"
 	k8spod "github.com/Dynatrace/dynatrace-operator/pkg/util/kubeobjects/pod"
 	maputils "github.com/Dynatrace/dynatrace-operator/pkg/util/map"
-	dtwebhook "github.com/Dynatrace/dynatrace-operator/pkg/webhook"
-	"github.com/Dynatrace/dynatrace-operator/pkg/webhook/mutation/pod/common/events"
-	podv2 "github.com/Dynatrace/dynatrace-operator/pkg/webhook/mutation/pod/v2"
+	"github.com/Dynatrace/dynatrace-operator/pkg/webhook/mutation/pod/events"
+	"github.com/Dynatrace/dynatrace-operator/pkg/webhook/mutation/pod/handler"
+	dtwebhook "github.com/Dynatrace/dynatrace-operator/pkg/webhook/mutation/pod/mutator"
 	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+)
+
+var (
+	log = logd.Get().WithName("pod-mutation")
 )
 
 const (
@@ -39,22 +45,27 @@ func AddWebhookToManager(ctx context.Context, mgr manager.Manager, ns string, is
 }
 
 type webhook struct {
-	v1 dtwebhook.PodInjector
-	v2 dtwebhook.PodInjector
-
 	recorder events.EventRecorder
-	decoder  admission.Decoder
 
-	apiReader client.Reader
+	injectionHandler handler.Handler
+	otlpHandler      handler.Handler
 
+	decoder admission.Decoder
+
+	kubeClient client.Client
+	apiReader  client.Reader
+
+	webhookPodImage  string
 	webhookNamespace string
-	deployedViaOLM   bool
+	isOpenShift      bool
+
+	deployedViaOLM bool
 }
 
 func (wh *webhook) Handle(ctx context.Context, request admission.Request) admission.Response {
 	emptyPatch := admission.Patched("")
-	mutationRequest, err := wh.createMutationRequestBase(ctx, request)
 
+	mutationRequest, err := wh.createMutationRequestBase(ctx, request)
 	if err != nil {
 		emptyPatch.Result.Message = fmt.Sprintf("unable to inject into pod (err=%s)", err.Error())
 		log.Error(err, "building mutation request base encountered an error")
@@ -76,16 +87,24 @@ func (wh *webhook) Handle(ctx context.Context, request admission.Request) admiss
 
 	wh.recorder.Setup(mutationRequest)
 
-	if podv2.IsEnabled(mutationRequest) {
-		err := wh.v2.Handle(ctx, mutationRequest)
-		if err != nil {
-			return silentErrorResponse(mutationRequest.Pod, err)
+	originalPod := mutationRequest.Pod.DeepCopy()
+
+	var handlerErr error
+
+	if err := wh.injectionHandler.Handle(mutationRequest); err != nil {
+		handlerErr = err
+	} else if err := wh.otlpHandler.Handle(mutationRequest); err != nil {
+		handlerErr = err
+	}
+
+	if handlerErr != nil {
+		mutErr := new(dtwebhook.MutatorError)
+		if !errors.As(handlerErr, mutErr) {
+			return silentErrorResponse(mutationRequest.Pod, handlerErr)
 		}
-	} else {
-		err := wh.v1.Handle(ctx, mutationRequest)
-		if err != nil {
-			return silentErrorResponse(mutationRequest.Pod, err)
-		}
+
+		mutationRequest.Pod = originalPod // prevent partial modifications
+		mutErr.SetAnnotations(mutationRequest.Pod)
 	}
 
 	log.Info("injection finished for pod", "podName", podName, "namespace", request.Namespace)
