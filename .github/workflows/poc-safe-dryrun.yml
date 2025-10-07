@@ -1,0 +1,14 @@
+name: PoC - Safe Dryrun Check (artifact-only)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  dryrun:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Run Safe Dryrun
+        run: echo "This is a safe dryrun PoC"
