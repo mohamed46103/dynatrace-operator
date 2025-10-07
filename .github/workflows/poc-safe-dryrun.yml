@@ -1,0 +1,32 @@
+name: PoC - Safe Dryrun Check (artifact-only)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  poc-safe-dryrun:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+      security-events: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Simulate PoC Execution (Safe Mode)
+        run: |
+          echo "=== Safe PoC Dry Run Started ==="
+          echo "Repository: $GITHUB_REPOSITORY"
+          echo "Branch: $GITHUB_REF"
+          echo "Workflow triggered by: $GITHUB_ACTOR"
+          echo "Simulating actions without any sensitive commands..."
+          echo "✅ PoC dry-run completed successfully."
+
+      - name: Upload Safe PoC Log
+        uses: actions/upload-artifact@v4
+        with:
+          name: poc-dryrun-log
+          path: .
